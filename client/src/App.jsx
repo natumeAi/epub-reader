@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useRef } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef } from 'react';
 import {
   DndContext,
   DragOverlay,
@@ -40,6 +40,7 @@ function App() {
   const {
     catalogBooks,
     catalogError,
+    folderBooksByFolderId,
     handleFileChange,
     hasLoadedCatalog,
     hasLoadedShelf,
@@ -48,7 +49,6 @@ function App() {
     isSavingOrder,
     isUploading,
     loadCatalog,
-    loadRecentReading,
     loadShelf,
     operationError,
     recentReadingItems,
@@ -65,6 +65,7 @@ function App() {
     void loadShelf();
   }, [loadShelf, replaceShelfFolder]);
   const {
+    finishCloseFolder,
     folderBooks,
     folderCloseVersion,
     folderError,
@@ -139,8 +140,8 @@ function App() {
   }
 
   const handleReaderProgressSettled = useCallback(() => {
-    void Promise.all([loadRecentReading(), loadCatalog()]);
-  }, [loadCatalog, loadRecentReading]);
+    void loadShelf({ background: true, allowCached: false });
+  }, [loadShelf]);
 
   const handleBookUnavailable = useCallback((bookId) => {
     clearReaderBookIfDeleted(bookId);
@@ -149,10 +150,35 @@ function App() {
 
   function handleOpenFolder(folder) {
     openFolderFromShelf(folder, {
+      books: folderBooksByFolderId.get(folder.id) || [],
       ignoreUntil: getFolderOpenIgnoreUntil(),
       isShelfBusy: isSavingOrder,
     });
+    void loadShelf({ background: true, allowCached: false });
   }
+
+  useEffect(() => {
+    if (!openFolder || isSavingFolderOrder) return;
+
+    const updatedFolderItem = shelfItems.find(
+      (item) => item.type === 'folder' && item.id === openFolder.id,
+    );
+    if (!updatedFolderItem) {
+      finishCloseFolder();
+      return;
+    }
+
+    setOpenFolder(updatedFolderItem.folder);
+    setFolderBooks(folderBooksByFolderId.get(openFolder.id) || []);
+  }, [
+    finishCloseFolder,
+    folderBooksByFolderId,
+    isSavingFolderOrder,
+    openFolder?.id,
+    setFolderBooks,
+    setOpenFolder,
+    shelfItems,
+  ]);
 
   return (
     <DndContext

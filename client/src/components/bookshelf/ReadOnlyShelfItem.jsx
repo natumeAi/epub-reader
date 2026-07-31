@@ -1,6 +1,6 @@
 import { ShelfItemCover } from './ShelfItemCover.jsx';
 
-export function ReadOnlyShelfItem({ item, onOpenBook, onOpenFolder }) {
+export function ReadOnlyShelfItem({ item, onOpenBook, onOpenFolder, priority = false }) {
   const name = item.type === 'folder'
     ? item.folder?.name || '文件夹'
     : item.book?.title || '未命名书籍';
@@ -27,7 +27,7 @@ export function ReadOnlyShelfItem({ item, onOpenBook, onOpenFolder }) {
       data-book-id={item.book?.id}
       onClick={handleClick}
     >
-      <ShelfItemCover item={item} />
+      <ShelfItemCover item={item} priority={priority} />
       <span className="shelf-item-label">{name}</span>
       {item.type === 'book' && item.folderName ? (
         <span className="shelf-item-context">位于“{item.folderName}”</span>

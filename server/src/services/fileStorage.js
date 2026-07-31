@@ -19,6 +19,7 @@ export const dataDir = process.env.EPUB_DATA_DIR
   : path.join(serverRoot, 'data');
 export const booksDir = path.join(dataDir, 'books');
 export const coversDir = path.join(dataDir, 'covers');
+export const coverThumbnailsDir = path.join(coversDir, 'thumbnails');
 export const stagingDir = path.join(dataDir, 'staging');
 export const STALE_UPLOAD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -28,6 +29,7 @@ export function ensureBookDirectory() {
 
 export function ensureCoverDirectory() {
   mkdirSync(coversDir, { recursive: true });
+  mkdirSync(coverThumbnailsDir, { recursive: true });
 }
 
 export function ensureStagingDirectory() {

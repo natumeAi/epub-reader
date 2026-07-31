@@ -1,0 +1,3 @@
+# Show cached library state before revalidation
+
+The installed PWA will cache its application shell, the last successfully loaded library state, and runtime cover thumbnails on each device. It will show that cached state immediately on launch and revalidate it in the background, accepting that users may briefly see stale library data in exchange for faster repeat launches and offline browsing. Revalidation runs on launch, application focus, network recovery, and after local mutations; the app does not maintain polling or a real-time connection for changes made on other devices. The cover cache has an approximate 100 MB budget and evicts least-recently-used entries first; application state and shell caches are separate, and EPUB files are not cached by default.

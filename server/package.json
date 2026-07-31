@@ -1,19 +1,23 @@
 {
   "name": "epub-reader-server",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
+    "covers:cleanup-legacy": "node src/scripts/cleanupLegacyCovers.js",
     "dev": "node --watch src/index.js",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test": "node --test"
   },
   "dependencies": {
     "adm-zip": "^0.6.0",
     "better-sqlite3": "^12.11.1",
     "chokidar": "^5.0.0",
+    "compression": "^1.8.1",
     "epub2": "^3.0.2",
     "express": "^5.1.0",
-    "multer": "^2.2.0"
+    "multer": "^2.2.0",
+    "sharp": "^0.35.3"
   },
   "overrides": {
     "epub2": {

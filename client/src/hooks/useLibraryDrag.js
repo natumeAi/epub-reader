@@ -638,7 +638,7 @@ export function useLibraryDrag({
         );
         clearFolderBookShelfDrag();
         setShelfItems((data.shelfItems || []).map(normalizeShelfItem));
-        await loadShelf();
+        await loadShelf({ background: true, allowCached: false });
       } catch (err) {
         const previousShelfItems = dragState.previousShelfItems;
         const previousFolderBooks = dragState.previousFolderBooks;
@@ -696,7 +696,7 @@ export function useLibraryDrag({
         try {
           const data = await createFolderFromBooks(activeItem.id, targetItem.id);
           setShelfItems((data.shelfItems || []).map(normalizeShelfItem));
-          await loadShelf();
+          await loadShelf({ background: true, allowCached: false });
         } catch (err) {
           setShelfItems(previousShelfItems);
           setError(err.message || '无法创建文件夹');
@@ -720,7 +720,7 @@ export function useLibraryDrag({
         try {
           const data = await moveShelfBookToFolder(targetItem.id, activeItem.id);
           setShelfItems((data.shelfItems || []).map(normalizeShelfItem));
-          await loadShelf();
+          await loadShelf({ background: true, allowCached: false });
         } catch (err) {
           setShelfItems(previousShelfItems);
           setError(err.message || '无法移入文件夹');
@@ -752,6 +752,7 @@ export function useLibraryDrag({
       try {
         const data = await updateShelfItemOrder(reorderedShelfItems.map(toShelfOrderItem));
         setShelfItems((data.items || reorderedShelfItems).map(normalizeShelfItem));
+        await loadShelf({ background: true, allowCached: false });
       } catch (err) {
         setShelfItems(previousShelfItems);
         setError(err.message || '无法保存书架顺序');
@@ -800,7 +801,7 @@ export function useLibraryDrag({
           reorderedFolderBooks.map((book) => book.id),
         );
         setFolderBooks((data.books || reorderedFolderBooks).map(normalizeFolderBook));
-        await loadShelf();
+        await loadShelf({ background: true, allowCached: false });
       } catch (err) {
         setFolderBooks(previousFolderBooks);
         setFolderError(err.message || '无法保存文件夹顺序');

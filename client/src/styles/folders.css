@@ -404,6 +404,13 @@
   }
 }
 
+@media (max-width: 720px) {
+  .folder-backdrop {
+    background: rgba(20, 20, 24, 0.26);
+    backdrop-filter: blur(8px) saturate(1.04);
+  }
+}
+
 @keyframes folder-fade-in {
   from { opacity: 0; }
   to { opacity: 1; }

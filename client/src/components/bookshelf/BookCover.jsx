@@ -1,12 +1,59 @@
-export function BookCover({ book }) {
-  if (book.coverUrl) {
+export function getBookCoverImage(book) {
+  const smallUrl = book?.coverThumbnailUrl || null;
+  const largeUrl = book?.coverThumbnail2xUrl || null;
+  const legacyUrl = book?.coverUrl || null;
+  const src = smallUrl || largeUrl || legacyUrl;
+  const srcSet = [
+    smallUrl ? `${smallUrl} 384w` : null,
+    largeUrl ? `${largeUrl} 768w` : null,
+  ]
+    .filter(Boolean)
+    .join(', ');
+
+  return {
+    fallbackUrl: src !== legacyUrl ? legacyUrl : null,
+    src,
+    srcSet: srcSet || undefined,
+  };
+}
+
+export function revealCoverImage(event) {
+  event.currentTarget.classList.add('is-loaded');
+}
+
+export function recoverLegacyCover(event) {
+  const image = event.currentTarget;
+  const fallbackUrl = image.dataset.fallbackUrl;
+
+  if (!fallbackUrl || image.dataset.fallbackApplied === 'true') {
+    image.classList.add('is-error');
+    return;
+  }
+
+  image.dataset.fallbackApplied = 'true';
+  image.removeAttribute('srcset');
+  image.src = fallbackUrl;
+}
+
+export function BookCover({ book, priority = false, sizes = '110px' }) {
+  const image = getBookCoverImage(book);
+
+  if (image.src) {
     return (
       <img
         className="book-cover-image"
-        src={book.coverUrl}
+        src={image.src}
+        srcSet={image.srcSet}
+        sizes={sizes}
         alt={book.title || '书籍封面'}
+        width="384"
+        height="576"
         decoding="async"
-        loading="lazy"
+        fetchPriority={priority ? 'high' : 'auto'}
+        loading={priority ? 'eager' : 'lazy'}
+        data-fallback-url={image.fallbackUrl || undefined}
+        onError={recoverLegacyCover}
+        onLoad={revealCoverImage}
       />
     );
   }

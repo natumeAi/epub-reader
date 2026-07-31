@@ -69,7 +69,7 @@ export function useFolderState({ onFolderRenamed } = {}) {
     setFolderCloseVersion((version) => version + 1);
   }, [invalidateFolderRequest]);
 
-  const handleOpenFolder = useCallback(async (folder, options = {}) => {
+  const handleOpenFolder = useCallback((folder, options = {}) => {
     const ignoreUntil = options.ignoreUntil || 0;
 
     if (!folder || options.isShelfBusy || performance.now() < ignoreUntil) {
@@ -81,26 +81,17 @@ export function useFolderState({ onFolderRenamed } = {}) {
       folderCloseTimeoutRef.current = null;
     }
 
-    const request = beginFolderRequest(folder.id);
+    invalidateFolderRequest();
     setIsFolderClosing(false);
     setOpenFolder(folder);
-    setFolderBooks([]);
+    setFolderBooks(
+      (Array.isArray(options.books) ? options.books : []).map(normalizeFolderBook),
+    );
     setFolderError('');
     setFolderNameDraft('');
     setIsRenamingFolder(false);
-    setIsFolderLoading(true);
-
-    try {
-      const data = await listFolderBooks(folder.id, { signal: request.controller.signal });
-      if (!isCurrentFolderRequest(request)) return;
-      setFolderBooks((data.books || []).map(normalizeFolderBook));
-    } catch (error) {
-      if (error?.name === 'AbortError' || !isCurrentFolderRequest(request)) return;
-      setFolderError(error.message || '无法加载文件夹');
-    } finally {
-      if (isCurrentFolderRequest(request)) setIsFolderLoading(false);
-    }
-  }, [beginFolderRequest, isCurrentFolderRequest]);
+    setIsFolderLoading(false);
+  }, [invalidateFolderRequest]);
 
   const handleCloseFolder = useCallback(() => {
     if (isSavingFolderName || isFolderClosing) {

@@ -1,14 +1,61 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { VitePWA } from 'vite-plugin-pwa';
 
 const apiTarget = process.env.EPUB_API_URL || 'http://localhost:3000';
+const proxy = {
+  '/api': apiTarget,
+  '/covers': apiTarget,
+};
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    VitePWA({
+      injectRegister: 'script-defer',
+      manifest: false,
+      registerType: 'autoUpdate',
+      includeAssets: [
+        'apple-touch-icon.png',
+        'icon.svg',
+        'icon-192.png',
+        'icon-512.png',
+        'manifest.webmanifest',
+      ],
+      workbox: {
+        cacheId: 'epub-reader',
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
+        globPatterns: ['**/*.{css,html,js,png,svg,webmanifest}'],
+        navigateFallback: '/index.html',
+        navigateFallbackDenylist: [
+          /^\/api\//,
+          /^\/covers\//,
+        ],
+        runtimeCaching: [
+          {
+            urlPattern: /\/covers\/thumbnails\/.+\.webp(?:\?.*)?$/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'epub-cover-thumbnails-v1',
+              cacheableResponse: {
+                statuses: [0, 200],
+              },
+              expiration: {
+                maxEntries: 500,
+                purgeOnQuotaError: true,
+              },
+            },
+          },
+        ],
+        skipWaiting: true,
+      },
+    }),
+  ],
   server: {
-    proxy: {
-      '/api': apiTarget,
-      '/covers': apiTarget,
-    },
+    proxy,
+  },
+  preview: {
+    proxy,
   },
 });

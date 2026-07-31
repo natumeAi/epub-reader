@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { listBookCatalog } from '../api/booksApi.js';
+import { getLibrarySnapshot } from '../api/libraryApi.js';
+import { hydrateLibrarySnapshot } from '../utils/librarySnapshot.js';
 import {
-  listShelfItems,
-} from '../api/foldersApi.js';
-import { listRecentReading } from '../api/readingApi.js';
+  loadCachedLibrarySnapshot,
+  saveCachedLibrarySnapshot,
+} from '../utils/librarySnapshotCache.js';
 import { normalizeShelfItem } from '../utils/libraryItems.js';
 import { useUploadBooks } from './useUploadBooks.js';
+
+const REVALIDATE_THROTTLE_MS = 2000;
 
 export function useShelfData({ restoreReaderBook } = {}) {
   const [shelfItems, setShelfItems] = useState([]);
   const [recentReadingItems, setRecentReadingItems] = useState([]);
+  const [folderBooksByFolderId, setFolderBooksByFolderId] = useState(() => new Map());
   const [hasLoadedShelf, setHasLoadedShelf] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSavingOrder, setIsSavingOrder] = useState(false);
@@ -19,85 +23,145 @@ export function useShelfData({ restoreReaderBook } = {}) {
   const [catalogError, setCatalogError] = useState('');
   const [hasLoadedCatalog, setHasLoadedCatalog] = useState(false);
   const [isCatalogLoading, setIsCatalogLoading] = useState(true);
-  const shelfRequestVersionRef = useRef(0);
-  const catalogRequestVersionRef = useRef(0);
-  const recentRequestVersionRef = useRef(0);
+  const snapshotRequestRef = useRef({
+    controller: null,
+    requestId: 0,
+  });
+  const latestSnapshotRecordRef = useRef(null);
+  const latestHydratedStateRef = useRef(null);
+  const hasAppliedSnapshotRef = useRef(false);
+  const lastRevalidateAtRef = useRef(0);
 
-  const loadRecentReading = useCallback(async () => {
-    const requestVersion = ++recentRequestVersionRef.current;
-    try {
-      const data = await listRecentReading();
-      const items = data.items || [];
-      if (recentRequestVersionRef.current === requestVersion) {
-        setRecentReadingItems(items);
-      }
-      return { items };
-    } catch {
-      if (recentRequestVersionRef.current === requestVersion) {
-        setRecentReadingItems([]);
-      }
-      return { items: [] };
-    }
-  }, []);
+  const applySnapshot = useCallback((snapshot) => {
+    const hydrated = hydrateLibrarySnapshot(snapshot);
+    const shouldRestoreReader = !hasAppliedSnapshotRef.current;
 
-  const loadCatalog = useCallback(async () => {
-    const requestVersion = ++catalogRequestVersionRef.current;
-    setIsCatalogLoading(true);
+    hasAppliedSnapshotRef.current = true;
+    latestHydratedStateRef.current = hydrated;
+    setShelfItems(hydrated.shelfData.items);
+    setCatalogBooks(hydrated.catalogData.books);
+    setRecentReadingItems(hydrated.recentData.items);
+    setFolderBooksByFolderId(hydrated.folderBooksByFolderId);
+    setHasLoadedShelf(true);
+    setHasLoadedCatalog(true);
+    setShelfError('');
     setCatalogError('');
 
-    try {
-      const data = await listBookCatalog();
-      if (catalogRequestVersionRef.current === requestVersion) {
-        setCatalogBooks(data.books || []);
+    if (shouldRestoreReader) {
+      restoreReaderBook?.(hydrated.shelfData, hydrated.recentData);
+    }
+
+    return hydrated;
+  }, [restoreReaderBook]);
+
+  const beginSnapshotRequest = useCallback(() => {
+    snapshotRequestRef.current.controller?.abort();
+    const controller = new AbortController();
+    const request = {
+      controller,
+      requestId: snapshotRequestRef.current.requestId + 1,
+    };
+    snapshotRequestRef.current = request;
+    return request;
+  }, []);
+
+  const isCurrentSnapshotRequest = useCallback((request) => (
+    snapshotRequestRef.current.requestId === request.requestId &&
+    snapshotRequestRef.current.controller === request.controller
+  ), []);
+
+  const loadShelf = useCallback(async (options = {}) => {
+    const background = options?.background === true;
+    const allowCached = options?.allowCached ?? !hasAppliedSnapshotRef.current;
+    const request = beginSnapshotRequest();
+    let hasUsableState = hasAppliedSnapshotRef.current;
+    let snapshotRecord = latestSnapshotRecordRef.current;
+
+    if (!background) {
+      setIsLoading(true);
+      setIsCatalogLoading(true);
+      setShelfError('');
+      setCatalogError('');
+    }
+
+    if (allowCached && !hasUsableState) {
+      try {
+        const cachedRecord = await loadCachedLibrarySnapshot();
+        if (!isCurrentSnapshotRequest(request)) return null;
+
+        if (cachedRecord?.snapshot) {
+          applySnapshot(cachedRecord.snapshot);
+          latestSnapshotRecordRef.current = cachedRecord;
+          snapshotRecord = cachedRecord;
+          hasUsableState = true;
+          setIsLoading(false);
+          setIsCatalogLoading(false);
+        }
+      } catch {
+        // IndexedDB may be unavailable or contain an obsolete entry; the network remains authoritative.
       }
-      return data;
-    } catch (err) {
-      if (catalogRequestVersionRef.current === requestVersion) {
-        setCatalogError(err.message || '搜索目录加载失败');
+    }
+
+    try {
+      const response = await getLibrarySnapshot({
+        etag: snapshotRecord?.etag,
+        signal: request.controller.signal,
+      });
+      if (!isCurrentSnapshotRequest(request)) return null;
+
+      if (!response.notModified && response.snapshot) {
+        const hydrated = applySnapshot(response.snapshot);
+        const nextRecord = {
+          etag: response.etag,
+          snapshot: response.snapshot,
+        };
+        latestSnapshotRecordRef.current = nextRecord;
+        hasUsableState = true;
+        void saveCachedLibrarySnapshot(nextRecord).catch(() => {});
+        return hydrated;
+      }
+
+      setShelfError('');
+      setCatalogError('');
+      return latestHydratedStateRef.current;
+    } catch (error) {
+      if (error?.name === 'AbortError' || !isCurrentSnapshotRequest(request)) {
+        return null;
+      }
+
+      if (!hasUsableState) {
+        const message = error.message || '无法加载书架';
+        setShelfError(message);
+        setCatalogError(message);
       }
       return null;
     } finally {
-      if (catalogRequestVersionRef.current === requestVersion) {
-        setHasLoadedCatalog(true);
-        setIsCatalogLoading(false);
-      }
-    }
-  }, []);
-
-  const loadShelf = useCallback(async () => {
-    const requestVersion = ++shelfRequestVersionRef.current;
-    setIsLoading(true);
-    setShelfError('');
-    const recentPromise = loadRecentReading();
-    void loadCatalog();
-
-    try {
-      const shelfData = await listShelfItems();
-      if (shelfRequestVersionRef.current === requestVersion) {
-        setShelfItems((shelfData.items || []).map(normalizeShelfItem));
-      }
-      void recentPromise
-        .then((recentData) => {
-          if (shelfRequestVersionRef.current === requestVersion) {
-            restoreReaderBook?.(shelfData, recentData);
-          }
-        })
-        .catch((err) => {
-          if (shelfRequestVersionRef.current === requestVersion) {
-            setShelfError(err.message || '无法加载书架');
-          }
-        });
-    } catch (err) {
-      if (shelfRequestVersionRef.current === requestVersion) {
-        setShelfError(err.message || '无法加载书架');
-      }
-    } finally {
-      if (shelfRequestVersionRef.current === requestVersion) {
+      if (isCurrentSnapshotRequest(request)) {
         setHasLoadedShelf(true);
+        setHasLoadedCatalog(true);
         setIsLoading(false);
+        setIsCatalogLoading(false);
+        snapshotRequestRef.current = {
+          controller: null,
+          requestId: request.requestId,
+        };
       }
     }
-  }, [loadCatalog, loadRecentReading, restoreReaderBook]);
+  }, [
+    applySnapshot,
+    beginSnapshotRequest,
+    isCurrentSnapshotRequest,
+  ]);
+
+  const loadCatalog = useCallback(async () => {
+    const hydrated = await loadShelf();
+    return hydrated?.catalogData ?? latestHydratedStateRef.current?.catalogData ?? null;
+  }, [loadShelf]);
+
+  const loadRecentReading = useCallback(async () => {
+    const hydrated = await loadShelf({ background: true, allowCached: false });
+    return hydrated?.recentData ?? latestHydratedStateRef.current?.recentData ?? { items: [] };
+  }, [loadShelf]);
 
   const {
     handleFileChange,
@@ -106,7 +170,36 @@ export function useShelfData({ restoreReaderBook } = {}) {
   } = useUploadBooks({ loadShelf, setError: setOperationError });
 
   useEffect(() => {
-    loadShelf();
+    void loadShelf({ allowCached: true });
+
+    return () => {
+      snapshotRequestRef.current.controller?.abort();
+    };
+  }, [loadShelf]);
+
+  useEffect(() => {
+    const revalidate = () => {
+      if (!hasAppliedSnapshotRef.current) return;
+      const now = Date.now();
+      if (now - lastRevalidateAtRef.current < REVALIDATE_THROTTLE_MS) return;
+      lastRevalidateAtRef.current = now;
+      void loadShelf({ background: true, allowCached: false });
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        revalidate();
+      }
+    };
+
+    window.addEventListener('focus', revalidate);
+    window.addEventListener('online', revalidate);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('focus', revalidate);
+      window.removeEventListener('online', revalidate);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [loadShelf]);
 
   const replaceShelfFolder = useCallback((renamedFolder) => {
@@ -122,6 +215,7 @@ export function useShelfData({ restoreReaderBook } = {}) {
   return {
     catalogBooks,
     catalogError,
+    folderBooksByFolderId,
     handleFileChange,
     hasLoadedCatalog,
     hasLoadedShelf,

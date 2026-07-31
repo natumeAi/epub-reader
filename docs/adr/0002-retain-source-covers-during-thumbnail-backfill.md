@@ -1,0 +1,3 @@
+# Retain source covers during thumbnail backfill
+
+Existing Docker libraries will receive WebP thumbnails through a resumable, non-blocking background backfill that keeps serving each legacy cover until its derived files are ready. The backfill converts one Book at a time at low priority and yields resources between Books so server readiness and foreground requests take precedence. Successfully converted source covers remain in the mounted data volume by default so an older image can still be restored; deleting them is an explicit post-upgrade maintenance action that trades rollback safety for disk space.

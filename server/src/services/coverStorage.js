@@ -1,9 +1,23 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { readFile, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { coversDir, ensureCoverDirectory, toAbsoluteStoragePath, toStoredPath } from './fileStorage.js';
+import sharp from 'sharp';
+import {
+  coversDir,
+  coverThumbnailsDir,
+  ensureCoverDirectory,
+  toAbsoluteStoragePath,
+  toStoredPath,
+} from './fileStorage.js';
 
 const fallbackCoverExtension = 'svg';
+export const COVER_THUMBNAIL_SMALL_WIDTH = 384;
+export const COVER_THUMBNAIL_LARGE_WIDTH = 768;
+const thumbnailWidths = [
+  COVER_THUMBNAIL_SMALL_WIDTH,
+  COVER_THUMBNAIL_LARGE_WIDTH,
+];
 const mimeTypeExtensions = new Map([
   ['image/jpeg', 'jpg'],
   ['image/jpg', 'jpg'],
@@ -12,6 +26,13 @@ const mimeTypeExtensions = new Map([
   ['image/gif', 'gif'],
   ['image/svg+xml', 'svg'],
 ]);
+
+sharp.concurrency(1);
+sharp.cache({
+  files: 0,
+  items: 32,
+  memory: 32,
+});
 
 function coverBaseName(storedBookPath) {
   return createHash('sha1').update(storedBookPath).digest('hex').slice(0, 24);
@@ -106,6 +127,86 @@ export function saveBookCover({ bookFilePath, coverImage, title, author }) {
   return toStoredPath(coverPath);
 }
 
+function thumbnailVersion(coverData) {
+  return createHash('sha256').update(coverData).digest('hex').slice(0, 20);
+}
+
+function thumbnailFilePath(baseName, version, width) {
+  return path.join(coverThumbnailsDir, `${baseName}-${version}-${width}.webp`);
+}
+
+async function writeThumbnailAtomically(coverData, targetPath, width) {
+  if (existsSync(targetPath)) {
+    return;
+  }
+
+  const temporaryPath = `${targetPath}.${randomUUID()}.tmp`;
+
+  try {
+    await sharp(coverData, { failOn: 'none' })
+      .rotate()
+      .resize({
+        width,
+        fit: 'inside',
+        withoutEnlargement: false,
+      })
+      .webp({
+        effort: 4,
+        quality: 80,
+        smartSubsample: true,
+      })
+      .toFile(temporaryPath);
+
+    try {
+      await rename(temporaryPath, targetPath);
+    } catch (error) {
+      if (!existsSync(targetPath)) {
+        throw error;
+      }
+    }
+  } finally {
+    if (existsSync(temporaryPath)) {
+      await unlink(temporaryPath).catch(() => {});
+    }
+  }
+}
+
+export async function ensureBookCoverThumbnails({ bookFilePath, storedCoverPath }) {
+  ensureCoverDirectory();
+
+  const coverPath = toAbsoluteStoragePath(storedCoverPath);
+  const coverData = await readFile(coverPath);
+  const storedBookPath = toStoredPath(bookFilePath);
+  const baseName = coverBaseName(storedBookPath);
+  const version = thumbnailVersion(coverData);
+  const storedPaths = new Map();
+
+  for (const width of thumbnailWidths) {
+    const targetPath = thumbnailFilePath(baseName, version, width);
+    await writeThumbnailAtomically(coverData, targetPath, width);
+    storedPaths.set(width, toStoredPath(targetPath));
+  }
+
+  return {
+    coverThumbnailSmallPath: storedPaths.get(COVER_THUMBNAIL_SMALL_WIDTH),
+    coverThumbnailLargePath: storedPaths.get(COVER_THUMBNAIL_LARGE_WIDTH),
+    coverThumbnailVersion: version,
+  };
+}
+
+export async function saveBookCoverAssets(options) {
+  const coverPath = saveBookCover(options);
+  const thumbnails = await ensureBookCoverThumbnails({
+    bookFilePath: options.bookFilePath,
+    storedCoverPath: coverPath,
+  });
+
+  return {
+    coverPath,
+    ...thumbnails,
+  };
+}
+
 export function deleteStoredCover(storedCoverPath) {
   if (!storedCoverPath) {
     return;
@@ -125,9 +226,13 @@ export function deleteBookCoverFiles(bookFilePath) {
   ensureCoverDirectory();
   const baseName = coverBaseName(toStoredPath(bookFilePath));
 
-  for (const fileName of readdirSync(coversDir)) {
-    if (!fileName.startsWith(`${baseName}.`)) continue;
-    const filePath = path.join(coversDir, fileName);
-    if (existsSync(filePath)) unlinkSync(filePath);
+  for (const directory of [coversDir, coverThumbnailsDir]) {
+    for (const fileName of readdirSync(directory)) {
+      const isSourceCover = directory === coversDir && fileName.startsWith(`${baseName}.`);
+      const isThumbnail = directory === coverThumbnailsDir && fileName.startsWith(`${baseName}-`);
+      if (!isSourceCover && !isThumbnail) continue;
+      const filePath = path.join(directory, fileName);
+      if (existsSync(filePath)) unlinkSync(filePath);
+    }
   }
 }

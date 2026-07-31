@@ -1,3 +1,4 @@
+import compression from 'compression';
 import express from 'express';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -5,9 +6,11 @@ import { fileURLToPath } from 'node:url';
 import { checkDatabase } from './db/database.js';
 import booksRouter from './routes/books.js';
 import foldersRouter from './routes/folders.js';
+import libraryRouter from './routes/library.js';
 import readingRouter from './routes/reading.js';
 import {
   cleanupStaleUploads,
+  coverThumbnailsDir,
   coversDir,
   ensureCoverDirectory,
   ensureStagingDirectory,
@@ -26,7 +29,15 @@ export function createApp({ db } = {}) {
   ensureStagingDirectory();
   cleanupStaleUploads();
 
+  app.use(compression());
   app.use(express.json({ limit: '1mb' }));
+  app.use(
+    '/covers/thumbnails',
+    express.static(coverThumbnailsDir, {
+      immutable: true,
+      maxAge: '1y',
+    }),
+  );
   app.use('/covers', express.static(coversDir));
 
   app.get('/api/health', (req, res) => {
@@ -41,6 +52,7 @@ export function createApp({ db } = {}) {
 
   app.use('/api/books', booksRouter);
   app.use('/api/folders', foldersRouter);
+  app.use('/api/library', libraryRouter);
   app.use('/api/reading', readingRouter);
 
   if (existsSync(clientIndexFile)) {

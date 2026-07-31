@@ -39,7 +39,7 @@ export function ContinueReadingSection({ items, onOpenBook, searchMode }) {
         <h2 id="continue-reading-title">继续阅读</h2>
       </div>
       <div className="continue-reading-list">
-        {items.map((item) => {
+        {items.map((item, index) => {
           const book = item.book;
           const metaId = `${descriptionIdPrefix}-book-${book.id}-meta`;
           const normalizedUpdatedAt = normalizeRecentReadingTimestamp(item.progress?.updatedAt);
@@ -64,7 +64,7 @@ export function ContinueReadingSection({ items, onOpenBook, searchMode }) {
               aria-label={`继续阅读《${book.title || '未命名书籍'}》`}
             >
               <span className="book-cover continue-book-cover">
-                <BookCover book={book} />
+                <BookCover book={book} priority={index < 3} />
               </span>
               <span className="continue-card-content">
                 <span className="continue-book-title">{book.title || '未命名书籍'}</span>

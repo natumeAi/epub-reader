@@ -34,7 +34,7 @@ export function LibraryGrid({
     return editable ? (
       <SortableContext items={items.map((item) => item.key)} strategy={rectSortingStrategy}>
         <div className="shelf-grid" aria-label="可编辑书架列表">
-          {items.map((item) => (
+          {items.map((item, index) => (
             <SortableShelfItem
               disabled={isSavingOrder}
               dragIntent={dragIntent}
@@ -42,18 +42,20 @@ export function LibraryGrid({
               key={item.key}
               onOpenBook={onOpenBook}
               onOpenFolder={onOpenFolder}
+              priority={index < 8}
             />
           ))}
         </div>
       </SortableContext>
     ) : (
       <div className="shelf-grid read-only-grid" aria-label="只读书架列表">
-        {items.map((item) => (
+        {items.map((item, index) => (
           <ReadOnlyShelfItem
             item={item}
             key={item.key}
             onOpenBook={onOpenBook}
             onOpenFolder={onOpenFolder}
+            priority={index < 8}
           />
         ))}
       </div>

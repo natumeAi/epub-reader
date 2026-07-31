@@ -7,7 +7,14 @@ const shelfSortTransition = {
   easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
 };
 
-export function SortableShelfItem({ disabled, dragIntent, item, onOpenBook, onOpenFolder }) {
+export function SortableShelfItem({
+  disabled,
+  dragIntent,
+  item,
+  onOpenBook,
+  onOpenFolder,
+  priority = false,
+}) {
   const {
     attributes,
     isDragging,
@@ -74,7 +81,7 @@ export function SortableShelfItem({ disabled, dragIntent, item, onOpenBook, onOp
       {...listeners}
       onKeyDown={handleKeyDown}
     >
-      <ShelfItemCover item={item} />
+      <ShelfItemCover item={item} priority={priority} />
       <span className="shelf-item-label">{label}</span>
     </button>
   );

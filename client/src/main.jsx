@@ -4,7 +4,6 @@ import App from './App.jsx';
 import './styles/base.css';
 import './styles/bookshelf.css';
 import './styles/folders.css';
-import './styles/reader.css';
 import './styles/pwa.css';
 
 createRoot(document.getElementById('root')).render(

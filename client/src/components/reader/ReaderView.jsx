@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import '../../styles/reader.css';
 import { useEpubRendition } from '../../hooks/useEpubRendition.js';
 import { useModalDialog } from '../../hooks/useModalDialog.js';
 import { usePageTurnController } from '../../hooks/usePageTurnController.js';

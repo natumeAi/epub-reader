@@ -7,7 +7,7 @@ const shelfSortTransition = {
   easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
 };
 
-export function SortableFolderBook({ book, disabled, onOpenBook }) {
+export function SortableFolderBook({ book, disabled, onOpenBook, priority = false }) {
   const {
     attributes,
     isDragging,
@@ -54,7 +54,7 @@ export function SortableFolderBook({ book, disabled, onOpenBook }) {
         {...listeners}
       >
         <span className="book-cover">
-          <BookCover book={book} />
+          <BookCover book={book} priority={priority} />
         </span>
         <span className="shelf-item-label">{label}</span>
       </button>

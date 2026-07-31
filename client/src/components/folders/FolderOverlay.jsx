@@ -127,12 +127,13 @@ export function FolderOverlay({
         ) : books.length ? (
           <SortableContext items={books.map((book) => book.key)} strategy={rectSortingStrategy}>
             <div className="folder-book-grid" aria-label="文件夹书籍">
-              {books.map((book) => (
+              {books.map((book, index) => (
                 <SortableFolderBook
                   book={book}
                   disabled={isSavingOrder}
                   key={book.key}
                   onOpenBook={onOpenBook}
+                  priority={index < 8}
                 />
               ))}
             </div>

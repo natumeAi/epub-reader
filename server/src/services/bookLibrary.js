@@ -8,7 +8,7 @@ import {
   toAbsoluteStoragePath,
   toStoredPath,
 } from './fileStorage.js';
-import { deleteStoredCover, saveBookCover } from './coverStorage.js';
+import { deleteBookCoverFiles, saveBookCoverAssets } from './coverStorage.js';
 import { parseEpubDetails } from './epubService.js';
 import { InvalidEpubError, validateEpubArchive } from './epubValidation.js';
 
@@ -64,6 +64,19 @@ export function formatBook(row) {
     fileSize: row.file_size,
     coverPath: row.cover_path,
     coverUrl: storagePathToUrl(row.cover_path, coversStoragePrefix, '/covers'),
+    coverThumbnailSmallPath: row.cover_thumbnail_small_path ?? null,
+    coverThumbnailLargePath: row.cover_thumbnail_large_path ?? null,
+    coverThumbnailUrl: storagePathToUrl(
+      row.cover_thumbnail_small_path,
+      coversStoragePrefix,
+      '/covers',
+    ),
+    coverThumbnail2xUrl: storagePathToUrl(
+      row.cover_thumbnail_large_path,
+      coversStoragePrefix,
+      '/covers',
+    ),
+    coverThumbnailVersion: row.cover_thumbnail_version ?? null,
     sortOrder: row.sort_order,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -201,12 +214,18 @@ export async function addBookFileToLibrary(db, filePath, options = {}) {
   const coverImage = epubDetails.coverImage;
   const title = metadata.title || options.title || existing?.title || fallbackTitle;
   const author = metadata.author;
-  const coverPath = saveBookCover({
+  const coverAssets = await saveBookCoverAssets({
     bookFilePath: filePath,
     coverImage,
     title,
     author,
   });
+  const {
+    coverPath,
+    coverThumbnailSmallPath,
+    coverThumbnailLargePath,
+    coverThumbnailVersion,
+  } = coverAssets;
 
   return db.transaction(() => {
     if (existing) {
@@ -224,6 +243,9 @@ export async function addBookFileToLibrary(db, filePath, options = {}) {
              file_size = @fileSize,
              file_mtime_ms = @fileMtimeMs,
              cover_path = @coverPath,
+             cover_thumbnail_small_path = @coverThumbnailSmallPath,
+             cover_thumbnail_large_path = @coverThumbnailLargePath,
+             cover_thumbnail_version = @coverThumbnailVersion,
              updated_at = CURRENT_TIMESTAMP
          WHERE id = @id`,
       ).run({
@@ -238,6 +260,9 @@ export async function addBookFileToLibrary(db, filePath, options = {}) {
         fileSize: fileStat.size,
         fileMtimeMs,
         coverPath,
+        coverThumbnailSmallPath,
+        coverThumbnailLargePath,
+        coverThumbnailVersion,
       });
 
       return db.prepare('SELECT * FROM books WHERE id = ?').get(existing.id);
@@ -257,6 +282,9 @@ export async function addBookFileToLibrary(db, filePath, options = {}) {
            file_size,
            file_mtime_ms,
            cover_path,
+           cover_thumbnail_small_path,
+           cover_thumbnail_large_path,
+           cover_thumbnail_version,
            sort_order
          )
          VALUES (
@@ -271,6 +299,9 @@ export async function addBookFileToLibrary(db, filePath, options = {}) {
            @fileSize,
            @fileMtimeMs,
            @coverPath,
+           @coverThumbnailSmallPath,
+           @coverThumbnailLargePath,
+           @coverThumbnailVersion,
            @sortOrder
          )`,
       )
@@ -286,6 +317,9 @@ export async function addBookFileToLibrary(db, filePath, options = {}) {
         fileSize: fileStat.size,
         fileMtimeMs,
         coverPath,
+        coverThumbnailSmallPath,
+        coverThumbnailLargePath,
+        coverThumbnailVersion,
         sortOrder: nextShelfSortOrder(db),
       });
 
@@ -295,11 +329,17 @@ export async function addBookFileToLibrary(db, filePath, options = {}) {
 
 export function removeBookFileFromLibrary(db, filePath) {
   const storedPath = toStoredPath(filePath);
-  const book = db.prepare('SELECT folder_id, cover_path FROM books WHERE file_path = ?').get(storedPath);
+  const book = db
+    .prepare(
+      `SELECT folder_id
+       FROM books
+       WHERE file_path = ?`,
+    )
+    .get(storedPath);
   const changes = db.prepare('DELETE FROM books WHERE file_path = ?').run(storedPath).changes;
 
   if (changes) {
-    deleteStoredCover(book?.cover_path);
+    deleteBookCoverFiles(filePath);
 
     if (book?.folder_id) {
       db.prepare(
