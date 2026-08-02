@@ -1,6 +1,7 @@
-import { useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import { rectSortingStrategy, SortableContext } from '@dnd-kit/sortable';
 import { useModalDialog } from '../../hooks/useModalDialog.js';
+import { folderPanelMotion } from '../../utils/folderMotion.js';
 import { SortableFolderBook } from './SortableFolderBook.jsx';
 
 export function FolderOverlay({
@@ -12,6 +13,7 @@ export function FolderOverlay({
   isRenaming,
   isRenameSaving,
   isSavingOrder,
+  originRect,
   onClose,
   onOpenBook,
   onRenameCancel,
@@ -21,11 +23,31 @@ export function FolderOverlay({
   renameDraft,
 }) {
   const initialFocusRef = useRef(null);
+  const panelRef = useRef(null);
   const { dialogRef, onKeyDown } = useModalDialog({
     initialFocusRef,
     onRequestClose: onClose,
     open: Boolean(folder),
   });
+
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+
+    if (!panel || !originRect) return;
+
+    panel.style.setProperty('animation', 'none');
+    const motion = folderPanelMotion(originRect, panel.getBoundingClientRect());
+
+    if (motion) {
+      panel.style.setProperty('--folder-origin-x', `${motion.translateX}px`);
+      panel.style.setProperty('--folder-origin-y', `${motion.translateY}px`);
+      panel.style.setProperty('--folder-origin-scale-x', String(motion.scaleX));
+      panel.style.setProperty('--folder-origin-scale-y', String(motion.scaleY));
+      panel.dataset.originMotion = 'true';
+    }
+
+    panel.style.removeProperty('animation');
+  }, [folder?.id, originRect]);
 
   if (!folder) {
     return null;
@@ -45,7 +67,11 @@ export function FolderOverlay({
       tabIndex={-1}
     >
       <div className="folder-backdrop" aria-hidden="true" onClick={onClose} />
-      <section className="folder-panel">
+      <section
+        ref={panelRef}
+        className="folder-panel"
+        data-origin-motion={originRect ? 'true' : undefined}
+      >
         <header className="folder-panel-header">
           {isRenaming ? (
             <div className="folder-title-editor">
@@ -113,37 +139,39 @@ export function FolderOverlay({
           </button>
         </header>
 
-        {error ? (
-          <p className="folder-status error-message" role="alert">
-            {error}
-          </p>
-        ) : null}
+        <div className="folder-panel-content">
+          {error ? (
+            <p className="folder-status error-message" role="alert">
+              {error}
+            </p>
+          ) : null}
 
-        {isLoading ? (
-          <div className="folder-loading-state" role="status" aria-live="polite">
-            <span className="folder-loading-spinner" aria-hidden="true" />
-            <p>正在打开文件夹</p>
-          </div>
-        ) : books.length ? (
-          <SortableContext items={books.map((book) => book.key)} strategy={rectSortingStrategy}>
-            <div className="folder-book-grid" aria-label="文件夹书籍">
-              {books.map((book, index) => (
-                <SortableFolderBook
-                  book={book}
-                  disabled={isSavingOrder}
-                  key={book.key}
-                  onOpenBook={onOpenBook}
-                  priority={index < 8}
-                />
-              ))}
+          {isLoading ? (
+            <div className="folder-loading-state" role="status" aria-live="polite">
+              <span className="folder-loading-spinner" aria-hidden="true" />
+              <p>正在打开文件夹</p>
             </div>
-          </SortableContext>
-        ) : (
-          <div className="folder-empty-state" role="status">
-            <div className="empty-cover" aria-hidden="true" />
-            <p>这个文件夹是空的</p>
-          </div>
-        )}
+          ) : books.length ? (
+            <SortableContext items={books.map((book) => book.key)} strategy={rectSortingStrategy}>
+              <div className="folder-book-grid" aria-label="文件夹书籍">
+                {books.map((book, index) => (
+                  <SortableFolderBook
+                    book={book}
+                    disabled={isSavingOrder}
+                    key={book.key}
+                    onOpenBook={onOpenBook}
+                    priority={index < 8}
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          ) : (
+            <div className="folder-empty-state" role="status">
+              <div className="empty-cover" aria-hidden="true" />
+              <p>这个文件夹是空的</p>
+            </div>
+          )}
+        </div>
       </section>
     </div>
   );

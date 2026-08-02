@@ -14,6 +14,7 @@ import { useFolderState } from './hooks/useFolderState.js';
 import { useLibraryDrag } from './hooks/useLibraryDrag.js';
 import { useReaderSession } from './hooks/useReaderSession.js';
 import { useShelfData } from './hooks/useShelfData.js';
+import { rectIntersectsViewport } from './utils/folderMotion.js';
 
 const ReaderView = lazy(() => import('./components/reader/ReaderView.jsx'));
 
@@ -70,8 +71,9 @@ function App() {
     folderCloseVersion,
     folderError,
     folderNameDraft,
+    folderOriginRect,
     handleCancelFolderRename,
-    handleCloseFolder,
+    handleCloseFolder: closeFolder,
     handleOpenFolder: openFolderFromShelf,
     handleStartFolderRename,
     handleSubmitFolderRename,
@@ -148,13 +150,29 @@ function App() {
     void loadShelf();
   }, [clearReaderBookIfDeleted, loadShelf]);
 
-  function handleOpenFolder(folder) {
+  function handleOpenFolder(folder, originRect) {
     openFolderFromShelf(folder, {
       books: folderBooksByFolderId.get(folder.id) || [],
       ignoreUntil: getFolderOpenIgnoreUntil(),
       isShelfBusy: isSavingOrder,
+      originRect,
     });
     void loadShelf({ background: true, allowCached: false });
+  }
+
+  function handleCloseFolder() {
+    const sourceElement = openFolder
+      ? document.querySelector(`[data-folder-id="${openFolder.id}"] .folder-cover`)
+      : null;
+    const sourceRect = sourceElement?.getBoundingClientRect() || null;
+    const viewport = {
+      width: window.innerWidth,
+      height: window.innerHeight,
+    };
+
+    closeFolder({
+      originRect: rectIntersectsViewport(sourceRect, viewport) ? sourceRect : null,
+    });
   }
 
   useEffect(() => {
@@ -217,6 +235,7 @@ function App() {
           books={folderBooks}
           error={folderError}
           folder={openFolder}
+          originRect={folderOriginRect}
           isClosing={isFolderClosing}
           isLoading={isFolderLoading}
           isRenaming={isRenamingFolder}

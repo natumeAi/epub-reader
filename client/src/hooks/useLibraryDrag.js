@@ -27,7 +27,7 @@ import {
   pointFromInputEvent,
   pointerCenterFromDragEvent,
   pointInRect,
-  restrictDragToShelfBounds,
+  shelfSortAreaRect,
   sortTargetKeyFromPoint,
 } from '../utils/dragGeometry.js';
 import {
@@ -268,8 +268,17 @@ export function useLibraryDrag({
 
       publishDragIntent({ type: 'sort', targetKey: null });
       const shelfElement = document.querySelector('.shelf-grid');
+      const viewportBottom = window.visualViewport
+        ? window.visualViewport.offsetTop + window.visualViewport.height
+        : window.innerHeight;
+      const shelfSortArea = shelfElement
+        ? shelfSortAreaRect(
+            shelfElement.getBoundingClientRect(),
+            viewportBottom,
+          )
+        : null;
 
-      if (shelfElement && !pointInRect(activeCenter, shelfElement.getBoundingClientRect())) {
+      if (shelfSortArea && !pointInRect(activeCenter, shelfSortArea)) {
         sortIntentRef.current = { startedAt: 0, targetKey: null };
         return activeCollision(active.id, droppableContainers);
       }
@@ -286,21 +295,7 @@ export function useLibraryDrag({
         return activeCollision(active.id, droppableContainers);
       }
 
-      const now = performance.now();
-
-      if (sortIntentRef.current.targetKey !== sortTargetKey) {
-        sortIntentRef.current = {
-          startedAt: now,
-          targetKey: sortTargetKey,
-        };
-
-        return activeCollision(active.id, droppableContainers);
-      }
-
-      if (now - sortIntentRef.current.startedAt < sortIntentDelayMs) {
-        return activeCollision(active.id, droppableContainers);
-      }
-
+      sortIntentRef.current = { startedAt: 0, targetKey: null };
       return collisionForKey(sortTargetKey, droppableContainers);
     },
     [publishDragIntent, shelfItems],
@@ -362,15 +357,7 @@ export function useLibraryDrag({
     [folderBooks],
   );
 
-  const activeDragModifier = useCallback((args) => {
-    const activeType = args.active?.data.current?.type;
-
-    if (activeType === 'book' || activeType === 'folder-book') {
-      return args.transform;
-    }
-
-    return restrictDragToShelfBounds(args);
-  }, []);
+  const activeDragModifier = useCallback((args) => args.transform, []);
 
   const appCollisionDetection = useCallback(
     (args) => {

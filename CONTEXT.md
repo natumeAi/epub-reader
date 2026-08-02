@@ -5,7 +5,7 @@ This context describes how readers organize EPUB books before opening them for r
 ## Language
 
 **Bookshelf**:
-The ordered top-level collection containing books and folders. A Bookshelf containing 300 direct items is the performance acceptance boundary, not a capacity limit.
+The compact, ordered top-level collection containing books and folders. Items occupy contiguous positions: dropping in open shelf space resolves to an insertion position rather than creating a persistent empty slot. A Bookshelf containing 300 direct items is the performance acceptance boundary, not a capacity limit.
 _Avoid_: Library home, root directory
 
 **Catalog**:

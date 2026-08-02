@@ -10,7 +10,8 @@ export function ReadOnlyShelfItem({ item, onOpenBook, onOpenFolder, priority = f
 
   const handleClick = (event) => {
     if (item.type === 'folder') {
-      onOpenFolder(item.folder);
+      const rect = event.currentTarget.querySelector('.folder-cover')?.getBoundingClientRect();
+      onOpenFolder(item.folder, rect || null);
       return;
     }
 
@@ -24,7 +25,8 @@ export function ReadOnlyShelfItem({ item, onOpenBook, onOpenFolder, priority = f
       type="button"
       aria-label={label}
       data-readonly="true"
-      data-book-id={item.book?.id}
+      data-book-id={item.type === 'book' ? item.book?.id : undefined}
+      data-folder-id={item.type === 'folder' ? item.folder?.id : undefined}
       onClick={handleClick}
     >
       <ShelfItemCover item={item} priority={priority} />

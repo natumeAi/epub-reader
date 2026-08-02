@@ -52,7 +52,8 @@ export function SortableShelfItem({
       : item.book?.title || '未命名书籍';
   const handleClick = (event) => {
     if (item.type === 'folder') {
-      onOpenFolder(item.folder);
+      const rect = event.currentTarget.querySelector('.folder-cover')?.getBoundingClientRect();
+      onOpenFolder(item.folder, rect || null);
     } else if (item.type === 'book') {
       const rect = event.currentTarget.querySelector('.book-cover')?.getBoundingClientRect();
       onOpenBook(item.book, rect || null);
@@ -76,6 +77,7 @@ export function SortableShelfItem({
       type="button"
       aria-label={label}
       data-book-id={item.type === 'book' ? item.book?.id : undefined}
+      data-folder-id={item.type === 'folder' ? item.folder?.id : undefined}
       onClick={handleClick}
       {...attributes}
       {...listeners}

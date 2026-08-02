@@ -109,23 +109,16 @@ export function sortTargetKeyFromPoint({ activeKey, point, items, droppableRects
   return orderedKeys[clampedIndex];
 }
 
-export function restrictDragToShelfBounds({ activeNodeRect, transform }) {
-  const shelfElement = document.querySelector('.shelf-grid');
-
-  if (!shelfElement || !activeNodeRect) {
-    return transform;
-  }
-
-  const shelfRect = shelfElement.getBoundingClientRect();
-  const minX = shelfRect.left - activeNodeRect.left;
-  const maxX = shelfRect.right - activeNodeRect.right;
-  const minY = shelfRect.top - activeNodeRect.top;
-  const maxY = shelfRect.bottom - activeNodeRect.bottom;
+export function shelfSortAreaRect(shelfRect, viewportBottom) {
+  const bottom = Math.max(shelfRect.bottom, viewportBottom);
 
   return {
-    ...transform,
-    x: Math.min(Math.max(transform.x, minX), maxX),
-    y: Math.min(Math.max(transform.y, minY), maxY),
+    left: shelfRect.left,
+    right: shelfRect.right,
+    top: shelfRect.top,
+    bottom,
+    width: shelfRect.width,
+    height: bottom - shelfRect.top,
   };
 }
 

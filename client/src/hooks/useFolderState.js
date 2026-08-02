@@ -3,10 +3,12 @@ import {
   listFolderBooks,
   renameFolder,
 } from '../api/foldersApi.js';
+import { snapshotRect } from '../utils/folderMotion.js';
 import { normalizeFolderBook } from '../utils/libraryItems.js';
 import { useReducedMotion } from './useReducedMotion.js';
 
-const FOLDER_CLOSE_ANIM_MS = 180;
+const FOLDER_CLOSE_ANIM_MS = 200;
+const REDUCED_MOTION_CLOSE_ANIM_MS = 100;
 
 export function useFolderState({ onFolderRenamed } = {}) {
   const reducedMotion = useReducedMotion();
@@ -25,6 +27,7 @@ export function useFolderState({ onFolderRenamed } = {}) {
   const [isSavingFolderOrder, setIsSavingFolderOrder] = useState(false);
   const [folderNameDraft, setFolderNameDraft] = useState('');
   const [folderError, setFolderError] = useState('');
+  const [folderOriginRect, setFolderOriginRect] = useState(null);
   const [folderCloseVersion, setFolderCloseVersion] = useState(0);
 
   const invalidateFolderRequest = useCallback(() => {
@@ -66,6 +69,7 @@ export function useFolderState({ onFolderRenamed } = {}) {
     setIsSavingFolderName(false);
     setIsSavingFolderOrder(false);
     setFolderNameDraft('');
+    setFolderOriginRect(null);
     setFolderCloseVersion((version) => version + 1);
   }, [invalidateFolderRequest]);
 
@@ -84,6 +88,7 @@ export function useFolderState({ onFolderRenamed } = {}) {
     invalidateFolderRequest();
     setIsFolderClosing(false);
     setOpenFolder(folder);
+    setFolderOriginRect(snapshotRect(options.originRect));
     setFolderBooks(
       (Array.isArray(options.books) ? options.books : []).map(normalizeFolderBook),
     );
@@ -93,22 +98,20 @@ export function useFolderState({ onFolderRenamed } = {}) {
     setIsFolderLoading(false);
   }, [invalidateFolderRequest]);
 
-  const handleCloseFolder = useCallback(() => {
+  const handleCloseFolder = useCallback((options = {}) => {
     if (isSavingFolderName || isFolderClosing) {
       return;
     }
 
     invalidateFolderRequest();
-    setIsFolderClosing(true);
-    if (reducedMotion) {
-      finishCloseFolder();
-      return;
+    if (Object.hasOwn(options, 'originRect')) {
+      setFolderOriginRect(snapshotRect(options.originRect));
     }
-
+    setIsFolderClosing(true);
     folderCloseTimeoutRef.current = setTimeout(() => {
       folderCloseTimeoutRef.current = null;
       finishCloseFolder();
-    }, FOLDER_CLOSE_ANIM_MS);
+    }, reducedMotion ? REDUCED_MOTION_CLOSE_ANIM_MS : FOLDER_CLOSE_ANIM_MS);
   }, [
     finishCloseFolder,
     invalidateFolderRequest,
@@ -196,6 +199,7 @@ export function useFolderState({ onFolderRenamed } = {}) {
     folderCloseVersion,
     folderError,
     folderNameDraft,
+    folderOriginRect,
     handleCancelFolderRename,
     handleCloseFolder,
     handleOpenFolder,
