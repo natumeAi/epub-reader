@@ -1,6 +1,8 @@
 import { existsSync } from 'node:fs';
 import {
   ensureBookCoverThumbnails,
+  isCurrentCoverThumbnailVersion,
+  isStoredGeneratedFallbackCover,
   saveBookCoverAssets,
 } from './coverStorage.js';
 import { parseEpubDetails } from './epubService.js';
@@ -27,6 +29,7 @@ function storedFileExists(storedPath) {
 
 function thumbnailsAreReady(book) {
   return (
+    isCurrentCoverThumbnailVersion(book.cover_thumbnail_version) &&
     storedFileExists(book.cover_thumbnail_small_path) &&
     storedFileExists(book.cover_thumbnail_large_path)
   );
@@ -36,6 +39,15 @@ async function buildCoverAssets(book) {
   const bookFilePath = toAbsoluteStoragePath(book.file_path);
 
   if (storedFileExists(book.cover_path)) {
+    if (await isStoredGeneratedFallbackCover(book.cover_path)) {
+      return saveBookCoverAssets({
+        bookFilePath,
+        coverImage: null,
+        title: book.title,
+        author: null,
+      });
+    }
+
     const thumbnails = await ensureBookCoverThumbnails({
       bookFilePath,
       storedCoverPath: book.cover_path,

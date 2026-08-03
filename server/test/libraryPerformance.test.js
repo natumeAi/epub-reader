@@ -1,6 +1,13 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -168,6 +175,29 @@ test('cover assets are content-addressed WebP files at both accepted widths', as
   });
 });
 
+test('generated fallback covers center a larger title and omit the author', () => {
+  ensureBookDirectory();
+  const bookFilePath = path.join(testDataDir, 'books', 'fallback-layout-test.epub');
+  writeFileSync(bookFilePath, 'test');
+  const coverPath = saveBookCover({
+    bookFilePath,
+    coverImage: null,
+    title: '义妹生活 短篇',
+    author: '不应显示的作者',
+  });
+  const coverSvg = readFileSync(toAbsoluteStoragePath(coverPath), 'utf8');
+
+  assert.match(coverSvg, /data-epub-reader-cover="fallback"/);
+  assert.match(coverSvg, /font-size="96"/);
+  assert.match(
+    coverSvg,
+    /font-family="Microsoft YaHei, 微软雅黑, Noto Sans CJK SC/,
+  );
+  assert.match(coverSvg, /text-anchor="middle"/);
+  assert.match(coverSvg, /<tspan x="480" y="720">义妹生活 短篇<\/tspan>/);
+  assert.doesNotMatch(coverSvg, /不应显示的作者/);
+});
+
 test('legacy covers backfill one book without requiring EPUB parsing', async () => {
   const db = createMemoryDatabase();
   ensureBookDirectory();
@@ -210,6 +240,73 @@ test('legacy covers backfill one book without requiring EPUB parsing', async () 
   assert.ok(existsSync(toAbsoluteStoragePath(book.cover_thumbnail_small_path)));
   assert.ok(existsSync(toAbsoluteStoragePath(book.cover_thumbnail_large_path)));
   assert.ok(book.cover_thumbnail_version);
+
+  db.close();
+});
+
+test('thumbnail backfill refreshes legacy generated fallback covers', async () => {
+  const db = createMemoryDatabase();
+  ensureBookDirectory();
+  const bookFilePath = path.join(testDataDir, 'books', 'legacy-fallback-test.epub');
+  writeFileSync(bookFilePath, 'not parsed because a generated fallback exists');
+  const coverPath = saveBookCover({
+    bookFilePath,
+    coverImage: null,
+    title: '旧版书名',
+    author: '旧版作者',
+  });
+  const absoluteCoverPath = toAbsoluteStoragePath(coverPath);
+  writeFileSync(
+    absoluteCoverPath,
+    `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="1440">
+      <defs><linearGradient id="paper"><stop offset="0" stop-color="#fff"/></linearGradient></defs>
+      <rect width="960" height="1440" rx="36" fill="url(#paper)"/>
+      <text x="80" y="232" font-size="34" font-family="Georgia, serif" fill="#9a7d62" letter-spacing="5">EPUB</text>
+      <text x="80" y="690" font-size="72" font-family="Georgia, serif" font-weight="700" fill="#3f342b">旧版书名</text>
+      <text x="80" y="1040" font-size="42" font-family="Georgia, serif" fill="#6f6257">旧版作者</text>
+    </svg>`,
+    'utf8',
+  );
+  const legacySmallPath = path.join(testDataDir, 'covers', 'thumbnails', 'legacy-small.webp');
+  const legacyLargePath = path.join(testDataDir, 'covers', 'thumbnails', 'legacy-large.webp');
+  mkdirSync(path.dirname(legacySmallPath), { recursive: true });
+  writeFileSync(legacySmallPath, 'old thumbnail');
+  writeFileSync(legacyLargePath, 'old thumbnail');
+
+  insertBook(db, {
+    id: 1,
+    title: '新版居中书名',
+    author: '不应显示的作者',
+    fileName: path.basename(bookFilePath),
+    filePath: toStoredPath(bookFilePath),
+    fileSize: 42,
+    coverPath,
+    sortOrder: 1000,
+  });
+  db.prepare(`
+    UPDATE books
+    SET cover_thumbnail_small_path = ?,
+        cover_thumbnail_large_path = ?,
+        cover_thumbnail_version = ?
+    WHERE id = 1
+  `).run(
+    toStoredPath(legacySmallPath),
+    toStoredPath(legacyLargePath),
+    'legacy-version',
+  );
+
+  const result = await backfillCoverThumbnails(db, {
+    betweenBookDelayMs: 0,
+  });
+  const book = db.prepare('SELECT * FROM books WHERE id = 1').get();
+  const refreshedSvg = readFileSync(toAbsoluteStoragePath(book.cover_path), 'utf8');
+
+  assert.equal(result.convertedCount, 1);
+  assert.match(book.cover_thumbnail_version, /^v3-/);
+  assert.notEqual(book.cover_thumbnail_small_path, toStoredPath(legacySmallPath));
+  assert.match(refreshedSvg, /data-epub-reader-cover="fallback"/);
+  assert.match(refreshedSvg, /新版居中书名/);
+  assert.doesNotMatch(refreshedSvg, /不应显示的作者|旧版作者/);
 
   db.close();
 });
