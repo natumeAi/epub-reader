@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef } from 'react';
 import { rectSortingStrategy, SortableContext } from '@dnd-kit/sortable';
 import { useModalDialog } from '../../hooks/useModalDialog.js';
+import { usePageScrollLock } from '../../hooks/usePageScrollLock.js';
 import { folderPanelMotion } from '../../utils/folderMotion.js';
 import { SortableFolderBook } from './SortableFolderBook.jsx';
 
@@ -29,6 +30,7 @@ export function FolderOverlay({
     onRequestClose: onClose,
     open: Boolean(folder),
   });
+  usePageScrollLock(Boolean(folder));
 
   useLayoutEffect(() => {
     const panel = panelRef.current;

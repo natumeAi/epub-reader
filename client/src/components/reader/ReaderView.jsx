@@ -4,6 +4,7 @@ import { useEpubRendition } from '../../hooks/useEpubRendition.js';
 import { useModalDialog } from '../../hooks/useModalDialog.js';
 import { usePageTurnController } from '../../hooks/usePageTurnController.js';
 import { usePageProgress } from '../../hooks/usePageProgress.js';
+import { usePageScrollLock } from '../../hooks/usePageScrollLock.js';
 import { useReadingProgressPersistence } from '../../hooks/useReadingProgressPersistence.js';
 import { useReaderSettings } from '../../hooks/useReaderSettings.js';
 import { useReducedMotion } from '../../hooks/useReducedMotion.js';
@@ -81,27 +82,7 @@ export function ReaderView({
   const [isReaderLayoutReady, setIsReaderLayoutReady] = useState(() => (
     !originRect || reducedMotion
   ));
-
-  useEffect(() => {
-    const root = document.documentElement;
-    const body = document.body;
-    const previousRootOverflow = root.style.overflow;
-    const previousRootOverscroll = root.style.overscrollBehavior;
-    const previousBodyOverflow = body.style.overflow;
-    const previousBodyOverscroll = body.style.overscrollBehavior;
-
-    root.style.overflow = 'hidden';
-    root.style.overscrollBehavior = 'none';
-    body.style.overflow = 'hidden';
-    body.style.overscrollBehavior = 'none';
-
-    return () => {
-      root.style.overflow = previousRootOverflow;
-      root.style.overscrollBehavior = previousRootOverscroll;
-      body.style.overflow = previousBodyOverflow;
-      body.style.overscrollBehavior = previousBodyOverscroll;
-    };
-  }, []);
+  usePageScrollLock();
 
   useEffect(() => {
     if (originRectRef.current) onOriginConsumed();
