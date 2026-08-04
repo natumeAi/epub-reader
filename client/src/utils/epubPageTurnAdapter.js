@@ -11,6 +11,10 @@ import {
 
 const ALIGNMENT_EPSILON_PX = 1;
 const DEFAULT_PAGE_TURN_BACKEND = 'compositor';
+// epub.js sizes each view to the full section, which can be hundreds of pages
+// wide. Promoting more than a few viewport surfaces can rebuild a very large
+// GPU layer even when only one page is visible.
+const MAX_COMPOSITOR_VIEWPORT_AREAS = 4;
 const SUPPORTED_RTL_SCROLL_TYPES = new Set(['default', 'negative']);
 
 function unavailable(reason) {
@@ -215,7 +219,7 @@ export function createEpubPageTurnAdapter(rendition, environment = {}) {
     }
   }
 
-  function inspectCompositor(capability, edgeElement = null) {
+  function inspectCompositor(capability, edgeElement = null, options = {}) {
     const views = capability.manager?.views;
     let displayedViews;
     try {
@@ -263,6 +267,35 @@ export function createEpubPageTurnAdapter(rendition, environment = {}) {
         view,
         willChange: element.style.willChange || '',
       });
+    }
+
+    if (options.ignoreSurfaceBudget !== true) {
+      const viewportWidth = Number(
+        capability.scroller.clientWidth || capability.scroller.offsetWidth,
+      );
+      const viewportHeight = Number(
+        capability.scroller.clientHeight || capability.scroller.offsetHeight,
+      );
+      if (
+        !Number.isFinite(viewportWidth) ||
+        viewportWidth <= 0 ||
+        !Number.isFinite(viewportHeight) ||
+        viewportHeight <= 0
+      ) {
+        return unavailable('viewport-geometry');
+      }
+
+      const viewportAreas = viewSnapshots.reduce((total, snapshot) => (
+        total +
+        (snapshot.geometry.width / viewportWidth) *
+        (snapshot.geometry.height / viewportHeight)
+      ), 0);
+      if (
+        !Number.isFinite(viewportAreas) ||
+        viewportAreas > MAX_COMPOSITOR_VIEWPORT_AREAS
+      ) {
+        return unavailable('surface-area');
+      }
     }
 
     if (edgeElement && typeof edgeElement.animate !== 'function') {
@@ -351,7 +384,9 @@ export function createEpubPageTurnAdapter(rendition, environment = {}) {
     if (!capability.available) return capability;
     if (forcedBackend() === 'compositor') {
       if (compositorDisabledReason) return unavailable(compositorDisabledReason);
-      const compositor = inspectCompositor(capability);
+      const compositor = inspectCompositor(capability, null, {
+        ignoreSurfaceBudget: true,
+      });
       if (!compositor.available) return unavailable(compositor.reason);
     }
     return capability;
@@ -586,9 +621,19 @@ export function createEpubPageTurnAdapter(rendition, environment = {}) {
       }
       return true;
     } catch {
-      releaseSession(activeSession);
       return false;
     }
+  }
+
+  function activateSessionStyles(activeSession = session) {
+    if (!activeSession) return false;
+    if (activeSession.stylesPrepared) return true;
+    if (!prepareSessionStyles(activeSession)) {
+      cancel({ reason: 'styles', restoreOrigin: true });
+      return false;
+    }
+    activeSession.stylesPrepared = true;
+    return true;
   }
 
   function createTransformKeyframes(from, to, pageWidth = 0) {
@@ -676,7 +721,9 @@ export function createEpubPageTurnAdapter(rendition, environment = {}) {
     const compositor = shouldInspectCompositor
       ? compositorDisabledReason
         ? unavailable(compositorDisabledReason)
-        : inspectCompositor(capability, edgeElement)
+        : inspectCompositor(capability, edgeElement, {
+            ignoreSurfaceBudget: forceBackend === 'compositor',
+          })
       : unavailable('not-selected');
     const backend = selectBackend({ compositor, forceBackend });
     if (!backend) return null;
@@ -711,6 +758,7 @@ export function createEpubPageTurnAdapter(rendition, environment = {}) {
       previousTransform: capability.scroller.style.transform || '',
       resolveCancellation,
       resolveCommit: null,
+      stylesPrepared: false,
       views: backend === 'compositor' ? compositor.views : [],
       viewportWidth: Number(
         capability.scroller.clientWidth || capability.scroller.offsetWidth,
@@ -718,10 +766,6 @@ export function createEpubPageTurnAdapter(rendition, environment = {}) {
       visualOffset: 0,
       watchers: [],
     };
-    if (!prepareSessionStyles(session)) {
-      session = null;
-      return null;
-    }
     session.diagnosticRecordId = diagnostics.begin({
       action,
       backend,
@@ -740,7 +784,7 @@ export function createEpubPageTurnAdapter(rendition, environment = {}) {
   }
 
   function dragBy(pointerDistanceX) {
-    if (!session) return null;
+    if (!session || !activateSessionStyles(session)) return null;
     let effectiveDistanceX = clampDragDistance(pointerDistanceX, session.pageWidth);
     const direction = effectiveDistanceX < 0 ? 'next' : 'prev';
     const missingNeighbor =
@@ -984,14 +1028,17 @@ export function createEpubPageTurnAdapter(rendition, environment = {}) {
     if (![-1, 0, 1].includes(pageDelta)) {
       return Promise.resolve(result('unavailable', session.backend));
     }
-    if (session.backend === 'compositor') {
-      return animateCompositorTo(pageDelta, options);
-    }
     if (
       (pageDelta === 1 && !session.canNext) ||
       (pageDelta === -1 && !session.canPrevious)
     ) {
+      return Promise.resolve(result('unavailable', session.backend));
+    }
+    if (!activateSessionStyles(session)) {
       return Promise.resolve(result('unavailable'));
+    }
+    if (session.backend === 'compositor') {
+      return animateCompositorTo(pageDelta, options);
     }
 
     stopAnimation();
