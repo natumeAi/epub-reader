@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
+import { centerTocEntry } from '../../utils/tocScrollPosition.js';
 
 function hrefDocument(href) {
   if (typeof href !== 'string') return '';
@@ -18,19 +19,17 @@ function formatStartProgress(progress) {
 
 export function TocPanel({ currentChapterId, currentHref, onSelect, toc }) {
   const currentEntryRef = useRef(null);
+  const tocListRef = useRef(null);
 
-  useEffect(() => {
-    const frame = requestAnimationFrame(() => {
-      currentEntryRef.current?.scrollIntoView({ block: 'center' });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [currentChapterId]);
+  useLayoutEffect(() => {
+    centerTocEntry(tocListRef.current, currentEntryRef.current);
+  }, [currentChapterId, currentHref, toc]);
 
   return (
     <div className="reader-panel reader-panel-toc" role="dialog" aria-label="章节目录">
       <div className="reader-panel-handle" aria-hidden="true" />
       <h2 className="reader-panel-title">目录</h2>
-      <ul className="reader-toc-list">
+      <ul ref={tocListRef} className="reader-toc-list">
         {toc.length === 0 && <li className="reader-toc-empty">无目录信息</li>}
         {toc.map((item) => (
           <TocItem
