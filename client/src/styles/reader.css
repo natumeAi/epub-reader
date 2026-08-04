@@ -385,6 +385,16 @@
   animation: reader-slide-up 0.26s ease;
 }
 
+.reader-panel-closing .reader-panel {
+  animation: reader-slide-down 0.26s ease forwards;
+  pointer-events: none;
+}
+
+.reader-panel-closing .reader-panel-backdrop {
+  animation: reader-fade-out 0.26s ease forwards;
+  pointer-events: none;
+}
+
 .reader-panel-handle {
   width: 36px;
   height: 4px;
@@ -750,9 +760,19 @@
   to { opacity: 1; }
 }
 
+@keyframes reader-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
 @keyframes reader-slide-up {
   from { transform: translateY(100%); }
   to { transform: translateY(0); }
+}
+
+@keyframes reader-slide-down {
+  from { transform: translateY(0); }
+  to { transform: translateY(100%); }
 }
 
 @keyframes reader-fallback-close {

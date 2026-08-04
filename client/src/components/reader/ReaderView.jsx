@@ -18,6 +18,7 @@ import { TocPanel } from './TocPanel.jsx';
 const READER_FLIP_ANIM_MS = 300;
 const READER_FLIP_EASE = 'cubic-bezier(0.22, 1, 0.36, 1)';
 const READER_COVER_FADE_MS = 200;
+const READER_PANEL_ANIM_MS = 260;
 // Fallback when the origin/target cover rect can't be found (e.g. off-screen).
 const READER_FALLBACK_ANIM_MS = 220;
 const noop = () => {};
@@ -57,6 +58,7 @@ export function ReaderView({
   const pageEdgeRef = useRef(null);
   const cancelPageTurnRef = useRef(null);
   const captureCurrentProgressRef = useRef(null);
+  const panelCloseTimerRef = useRef(null);
   const progressSettlementRef = useRef(null);
   const unmountSettlementTimerRef = useRef(null);
   const cancelBeforeRenditionMutation = useCallback(() => {
@@ -67,6 +69,7 @@ export function ReaderView({
   const [chromeVisible, setChromeVisible] = useState(false);
   // Bottom-bar panel: null | 'toc' | 'settings'
   const [activePanel, setActivePanel] = useState(null);
+  const [isPanelClosing, setIsPanelClosing] = useState(false);
   // Settings panel page: 'main' | 'font'
   const [settingsView, setSettingsView] = useState('main');
   // Open/close FLIP animation state: the overlay transform collapses onto (or
@@ -83,6 +86,39 @@ export function ReaderView({
     !originRect || reducedMotion
   ));
   usePageScrollLock();
+
+  const clearPanelCloseTimer = useCallback(() => {
+    if (panelCloseTimerRef.current === null) return;
+    clearTimeout(panelCloseTimerRef.current);
+    panelCloseTimerRef.current = null;
+  }, []);
+
+  const openPanel = useCallback((panel) => {
+    clearPanelCloseTimer();
+    setIsPanelClosing(false);
+    setActivePanel(panel);
+  }, [clearPanelCloseTimer]);
+
+  const closePanel = useCallback(() => {
+    if (!activePanel || isPanelClosing) return;
+    clearPanelCloseTimer();
+    if (reducedMotion) {
+      setActivePanel(null);
+      setIsPanelClosing(false);
+      return;
+    }
+
+    setIsPanelClosing(true);
+    panelCloseTimerRef.current = setTimeout(() => {
+      panelCloseTimerRef.current = null;
+      setActivePanel(null);
+      setIsPanelClosing(false);
+    }, READER_PANEL_ANIM_MS);
+  }, [activePanel, clearPanelCloseTimer, isPanelClosing, reducedMotion]);
+
+  useEffect(() => () => {
+    clearPanelCloseTimer();
+  }, [clearPanelCloseTimer]);
 
   useEffect(() => {
     if (originRectRef.current) onOriginConsumed();
@@ -210,10 +246,10 @@ export function ReaderView({
 
   const handleCenterTap = useCallback(() => {
     setChromeVisible((visible) => {
-      if (visible) setActivePanel(null);
+      if (visible) closePanel();
       return !visible;
     });
-  }, []);
+  }, [closePanel]);
 
   const {
     cancelPageTurn,
@@ -356,8 +392,8 @@ export function ReaderView({
     cancelPageTurnRef.current?.('toc');
     if (!href) return;
     renditionRef.current?.display(href);
-    setActivePanel(null);
-  }, []);
+    closePanel();
+  }, [closePanel]);
 
   const overlayStyle = {
     '--reader-bg': readerTheme.background,
@@ -372,15 +408,20 @@ export function ReaderView({
     overlayStyle.transition = `transform ${READER_FLIP_ANIM_MS}ms ${READER_FLIP_EASE}`;
   }
   const handleToggleTocPanel = () => {
-    setActivePanel((panel) => (panel === 'toc' ? null : 'toc'));
+    if (activePanel === 'toc') {
+      closePanel();
+      return;
+    }
+    openPanel('toc');
   };
 
   const handleToggleSettingsPanel = () => {
-    setActivePanel((panel) => {
-      if (panel === 'settings') return null;
-      setSettingsView('main');
-      return 'settings';
-    });
+    if (activePanel === 'settings') {
+      closePanel();
+      return;
+    }
+    setSettingsView('main');
+    openPanel('settings');
   };
 
   return (
@@ -395,6 +436,7 @@ export function ReaderView({
         chromeVisible ? '' : 'reader-chrome-hidden',
         pageTurnPhase ? 'reader-page-turn-' + pageTurnPhase : '',
         pageTurnDirection ? 'reader-page-turn-direction-' + pageTurnDirection : '',
+        isPanelClosing ? 'reader-panel-closing' : '',
         isFallbackClosing ? 'reader-fallback-closing' : '',
       ].filter(Boolean).join(' ')}
       style={overlayStyle}
@@ -486,7 +528,7 @@ export function ReaderView({
       )}
 
       {activePanel && (
-        <div className="reader-panel-backdrop" onClick={() => setActivePanel(null)} />
+        <div className="reader-panel-backdrop" onClick={closePanel} />
       )}
       {activePanel === 'toc' && (
         <TocPanel
