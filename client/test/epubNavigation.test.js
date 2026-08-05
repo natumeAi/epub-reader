@@ -16,6 +16,74 @@ function waitForFrame() {
   return new Promise((resolve) => setTimeout(resolve, 5));
 }
 
+function createFrameHarness() {
+  let callbacks = [];
+  return {
+    cancelAnimationFrame(callback) {
+      callbacks = callbacks.filter((candidate) => candidate !== callback);
+    },
+    requestAnimationFrame(callback) {
+      callbacks.push(callback);
+      return callback;
+    },
+    runFrame() {
+      const currentCallbacks = callbacks;
+      callbacks = [];
+      currentCallbacks.forEach((callback) => callback());
+    },
+  };
+}
+
+function createResizeObserverHarness() {
+  const observers = [];
+  class ResizeObserver {
+    constructor(callback) {
+      this.callback = callback;
+      this.elements = new Set();
+      observers.push(this);
+    }
+
+    disconnect() {
+      this.elements.clear();
+    }
+
+    observe(element) {
+      this.elements.add(element);
+    }
+  }
+
+  return {
+    ResizeObserver,
+    notify(element) {
+      observers.forEach((observer) => {
+        if (observer.elements.has(element)) observer.callback([{ target: element }]);
+      });
+    },
+  };
+}
+
+function createTimerHarness() {
+  const timers = [];
+  return {
+    clearTimeout(timer) {
+      if (timer) timer.cleared = true;
+    },
+    runDelay(delay) {
+      timers
+        .filter((timer) => !timer.cleared && timer.delay === delay)
+        .forEach((timer) => {
+          timer.cleared = true;
+          timer.callback();
+        });
+    },
+    setTimeout(callback, delay) {
+      const timer = { callback, cleared: false, delay };
+      timers.push(timer);
+      return timer;
+    },
+  };
+}
+
 function displayedPage(view, scrollLeft) {
   return Math.floor((scrollLeft - view.element.offsetLeft) / PAGE_WIDTH) + 1;
 }
@@ -261,6 +329,644 @@ test('anchors one visible page across multiple erases in the same frame', async 
 
   assert.equal(displayedPage(textView, container.scrollLeft), 3);
   assert.deepEqual(scrollCalls, [PAGE_WIDTH * 2]);
+  cleanup();
+});
+
+test('keeps chapter 24 on its preceding illustration when a prepended section expands', async () => {
+  const resizeObserver = createResizeObserverHarness();
+  const container = { scrollLeft: 0, style: {} };
+  const illustrationView = {
+    element: { offsetLeft: 0, offsetWidth: PAGE_WIDTH },
+    section: { index: 37 },
+  };
+  const views = [illustrationView];
+  const manager = {
+    container,
+    name: 'continuous',
+    scrollTo(left) {
+      container.scrollLeft = left;
+    },
+    settings: { axis: 'horizontal', direction: 'ltr' },
+    views: { all: () => views },
+    erase() {},
+    prepend(section) {
+      const view = {
+        element: { offsetLeft: 0, offsetWidth: PAGE_WIDTH * 6 },
+        section,
+      };
+      views.unshift(view);
+      illustrationView.element.offsetLeft += view.element.offsetWidth;
+      container.scrollLeft += view.element.offsetWidth;
+      return view;
+    },
+  };
+  const cleanup = stabilizeContinuousManagerLayout({ manager }, {
+    ...frameEnvironment,
+    ResizeObserver: resizeObserver.ResizeObserver,
+  });
+
+  // epub.js first counters the provisional six-page width of the prepended
+  // text section. Reader styles then expand it to sixteen pages after that
+  // counter has run. The page before section 38 must remain section 37 rather
+  // than drifting into page 7 of the expanded text section.
+  const prependedView = manager.prepend({ index: 36 });
+  const lateWidthDelta = PAGE_WIDTH * 10;
+  prependedView.element.offsetWidth += lateWidthDelta;
+  illustrationView.element.offsetLeft += lateWidthDelta;
+  resizeObserver.notify(prependedView.element);
+  await waitForFrame();
+
+  assert.equal(container.scrollLeft, illustrationView.element.offsetLeft);
+  cleanup();
+});
+
+test('syncs the manager scroll offset before a prepend check can repeat', async () => {
+  const timers = createTimerHarness();
+  const container = { scrollLeft: 0, style: {} };
+  const illustrationView = {
+    element: { offsetLeft: 0, offsetWidth: PAGE_WIDTH },
+    section: { index: 37 },
+  };
+  const views = [illustrationView];
+  let prependCalls = 0;
+  const manager = {
+    container,
+    name: 'continuous',
+    scrollLeft: 0,
+    settings: { axis: 'horizontal', direction: 'ltr' },
+    views: { all: () => views },
+    erase() {},
+    prepend(section) {
+      prependCalls += 1;
+      const view = {
+        element: { offsetLeft: 0, offsetWidth: 0 },
+        section,
+        display() {
+          const width = PAGE_WIDTH * 5;
+          view.element.offsetWidth = width;
+          illustrationView.element.offsetLeft += width;
+          container.scrollLeft += width;
+          return Promise.resolve(view);
+        },
+      };
+      views.unshift(view);
+      return view;
+    },
+    async check() {
+      const firstView = manager.prepend({ index: 36 });
+      await firstView.display();
+      if (manager.scrollLeft <= 0) {
+        const duplicateView = manager.prepend({ index: 35 });
+        await duplicateView.display();
+      }
+    },
+  };
+  const cleanup = stabilizeContinuousManagerLayout({ manager }, {
+    ...frameEnvironment,
+    clearTimeout: timers.clearTimeout,
+    setTimeout: timers.setTimeout,
+  });
+
+  await manager.check();
+
+  assert.equal(prependCalls, 1);
+  assert.equal(manager.scrollLeft, PAGE_WIDTH * 5);
+  cleanup();
+});
+
+test('does not fight the initial counter-scroll while a prepended view is displaying', async () => {
+  const timers = createTimerHarness();
+  const container = { scrollLeft: 0, style: {} };
+  const illustrationView = {
+    element: { offsetLeft: 0, offsetWidth: PAGE_WIDTH },
+    section: { index: 37 },
+  };
+  const views = [illustrationView];
+  let resolveDisplay;
+  const manager = {
+    container,
+    name: 'continuous',
+    scrollLeft: 0,
+    scrollTo(left) {
+      container.scrollLeft = left;
+    },
+    settings: { axis: 'horizontal', direction: 'ltr' },
+    views: { all: () => views },
+    erase() {},
+    prepend(section) {
+      const view = {
+        element: { offsetLeft: 0, offsetWidth: 0 },
+        section,
+        display() {
+          container.scrollLeft = PAGE_WIDTH * 5;
+          return new Promise((resolve) => {
+            resolveDisplay = () => {
+              view.element.offsetWidth = PAGE_WIDTH * 5;
+              illustrationView.element.offsetLeft = PAGE_WIDTH * 5;
+              resolve(view);
+            };
+          });
+        },
+      };
+      views.unshift(view);
+      return view;
+    },
+  };
+  const cleanup = stabilizeContinuousManagerLayout({ manager }, {
+    ...frameEnvironment,
+    clearTimeout: timers.clearTimeout,
+    setTimeout: timers.setTimeout,
+  });
+
+  const prependedView = manager.prepend({ index: 36 });
+  const display = prependedView.display();
+  await waitForFrame();
+
+  assert.equal(container.scrollLeft, PAGE_WIDTH * 5);
+
+  resolveDisplay();
+  await display;
+  cleanup();
+});
+
+test('does not unload a visible illustration while a prepended publication document settles after prev', async () => {
+  const frames = createFrameHarness();
+  const container = { scrollLeft: PAGE_WIDTH, style: {} };
+  const precedingSection = { index: 38 };
+  const illustrationView = {
+    displayed: true,
+    element: { offsetLeft: 0, offsetWidth: PAGE_WIDTH },
+    section: { index: 39 },
+    destroy() {
+      illustrationView.displayed = false;
+    },
+  };
+  const followingTextView = {
+    element: { offsetLeft: PAGE_WIDTH, offsetWidth: PAGE_WIDTH * 9 },
+    section: { index: 40 },
+  };
+  const views = [illustrationView, followingTextView];
+  const manager = {
+    container,
+    name: 'continuous',
+    scrollLeft: PAGE_WIDTH,
+    scrollTo(left) {
+      container.scrollLeft = left;
+    },
+    settings: { axis: 'horizontal', direction: 'ltr' },
+    views: {
+      all: () => views,
+      first: () => views[0],
+    },
+    erase() {},
+    prepend(section) {
+      const view = {
+        displayed: false,
+        element: { offsetLeft: 0, offsetWidth: 0 },
+        section,
+        display() {
+          // The epub.js counter-scroll can run before Chromium publishes the
+          // prepended document's width to offsetWidth.
+          container.scrollLeft = PAGE_WIDTH * 3;
+          frames.requestAnimationFrame(() => {
+            frames.requestAnimationFrame(() => {
+              view.element.offsetWidth = PAGE_WIDTH * 4;
+              illustrationView.element.offsetLeft = PAGE_WIDTH * 4;
+              followingTextView.element.offsetLeft = PAGE_WIDTH * 5;
+              frames.requestAnimationFrame(() => {
+                view.element.offsetWidth = PAGE_WIDTH * 5;
+                illustrationView.element.offsetLeft = PAGE_WIDTH * 5;
+                followingTextView.element.offsetLeft = PAGE_WIDTH * 6;
+                container.scrollLeft = PAGE_WIDTH * 4;
+                manager.scrollLeft = container.scrollLeft;
+              });
+            });
+          });
+          view.displayed = true;
+          return Promise.resolve(view);
+        },
+      };
+      views.unshift(view);
+      return view;
+    },
+    async check() {
+      const view = manager.prepend(precedingSection);
+      await view.display();
+      manager.update();
+    },
+    update() {
+      const left = illustrationView.element.offsetLeft;
+      const right = left + illustrationView.element.offsetWidth;
+      if (container.scrollLeft < left || container.scrollLeft >= right) {
+        illustrationView.destroy();
+      }
+    },
+    prev() {
+      container.scrollLeft -= PAGE_WIDTH;
+      manager.scrollLeft = container.scrollLeft;
+      return Promise.resolve().then(() => manager.check());
+    },
+  };
+  const cleanup = stabilizeContinuousManagerLayout({ manager }, frames);
+
+  const navigation = manager.prev();
+  frames.runFrame();
+  await Promise.resolve();
+  await Promise.resolve();
+  frames.runFrame();
+  for (let index = 0; index < 10; index += 1) {
+    await Promise.resolve();
+  }
+  frames.runFrame();
+  for (let index = 0; index < 10; index += 1) {
+    await Promise.resolve();
+  }
+  frames.runFrame();
+  for (let index = 0; index < 10; index += 1) {
+    await Promise.resolve();
+  }
+  frames.runFrame();
+  await navigation;
+
+  assert.equal(illustrationView.displayed, true);
+  assert.equal(container.scrollLeft, illustrationView.element.offsetLeft);
+  cleanup();
+});
+
+test('releases a prepend anchor when a new manager navigation begins', async () => {
+  const resizeObserver = createResizeObserverHarness();
+  const container = { scrollLeft: 0, style: {} };
+  const anchorView = {
+    element: { offsetLeft: 0, offsetWidth: PAGE_WIDTH },
+    section: { index: 37 },
+  };
+  const views = [anchorView];
+  const manager = {
+    container,
+    name: 'continuous',
+    prev() {
+      container.scrollLeft -= PAGE_WIDTH;
+    },
+    scrollTo(left) {
+      container.scrollLeft = left;
+    },
+    settings: { axis: 'horizontal', direction: 'ltr' },
+    views: { all: () => views },
+    erase() {},
+    prepend(section) {
+      const view = {
+        element: { offsetLeft: 0, offsetWidth: PAGE_WIDTH * 6 },
+        section,
+      };
+      views.unshift(view);
+      anchorView.element.offsetLeft += view.element.offsetWidth;
+      container.scrollLeft += view.element.offsetWidth;
+      return view;
+    },
+  };
+  const cleanup = stabilizeContinuousManagerLayout({ manager }, {
+    ...frameEnvironment,
+    ResizeObserver: resizeObserver.ResizeObserver,
+  });
+
+  const prependedView = manager.prepend({ index: 36 });
+  prependedView.element.offsetWidth += PAGE_WIDTH * 10;
+  anchorView.element.offsetLeft += PAGE_WIDTH * 10;
+  resizeObserver.notify(prependedView.element);
+  await waitForFrame();
+  manager.prev();
+  const nextPageScrollLeft = container.scrollLeft;
+
+  prependedView.element.offsetWidth += PAGE_WIDTH;
+  anchorView.element.offsetLeft += PAGE_WIDTH;
+  resizeObserver.notify(prependedView.element);
+  await waitForFrame();
+
+  assert.equal(container.scrollLeft, nextPageScrollLeft);
+  cleanup();
+});
+
+test('cancels a pending erase anchor when a new manager navigation begins', async () => {
+  const {
+    container,
+    manager,
+    precedingView,
+  } = createContinuousManager();
+  manager.prev = () => {
+    container.scrollLeft = 0;
+  };
+  const cleanup = stabilizeContinuousManagerLayout({ manager }, frameEnvironment);
+
+  manager.erase(precedingView);
+  manager.prev();
+  await waitForFrame();
+
+  assert.equal(container.scrollLeft, 0);
+  cleanup();
+});
+
+test('anchors the new page when a preceding view resizes after prev', async () => {
+  const resizeObserver = createResizeObserverHarness();
+  const container = { scrollLeft: PAGE_WIDTH * 5, style: {} };
+  const precedingIllustrationView = {
+    element: { offsetLeft: 0, offsetWidth: PAGE_WIDTH },
+    section: { index: 37 },
+  };
+  const textView = {
+    element: { offsetLeft: PAGE_WIDTH, offsetWidth: PAGE_WIDTH * 4 },
+    section: { index: 38 },
+  };
+  const followingIllustrationView = {
+    element: { offsetLeft: PAGE_WIDTH * 5, offsetWidth: PAGE_WIDTH },
+    section: { index: 39 },
+  };
+  const views = [precedingIllustrationView, textView, followingIllustrationView];
+  const manager = {
+    container,
+    name: 'continuous',
+    scrollTo(left) {
+      container.scrollLeft = left;
+    },
+    settings: { axis: 'horizontal', direction: 'ltr' },
+    views: { all: () => views },
+    erase() {},
+    prev() {
+      container.scrollLeft -= PAGE_WIDTH;
+    },
+  };
+  const cleanup = stabilizeContinuousManagerLayout({ manager }, {
+    ...frameEnvironment,
+    ResizeObserver: resizeObserver.ResizeObserver,
+  });
+
+  manager.prev();
+  assert.equal(container.scrollLeft, PAGE_WIDTH * 4);
+
+  precedingIllustrationView.element.offsetWidth = 0;
+  textView.element.offsetLeft = 0;
+  followingIllustrationView.element.offsetLeft = PAGE_WIDTH * 4;
+  resizeObserver.notify(precedingIllustrationView.element);
+  await waitForFrame();
+
+  assert.equal(container.scrollLeft, PAGE_WIDTH * 3);
+  cleanup();
+});
+
+test('does not re-enter manager visibility updates while stabilizing a prev turn', async () => {
+  const resizeObserver = createResizeObserverHarness();
+  const timers = createTimerHarness();
+  let reportLocationCalls = 0;
+  let updateCalls = 0;
+  const container = { scrollLeft: PAGE_WIDTH * 5, style: {} };
+  const precedingIllustrationView = {
+    element: { offsetLeft: 0, offsetWidth: PAGE_WIDTH },
+    section: { index: 37 },
+  };
+  const textView = {
+    element: { offsetLeft: PAGE_WIDTH, offsetWidth: PAGE_WIDTH * 4 },
+    section: { index: 38 },
+  };
+  const followingIllustrationView = {
+    element: { offsetLeft: PAGE_WIDTH * 5, offsetWidth: PAGE_WIDTH },
+    section: { index: 39 },
+  };
+  const views = [precedingIllustrationView, textView, followingIllustrationView];
+  const manager = {
+    container,
+    name: 'continuous',
+    scrollTo(left) {
+      container.scrollLeft = left;
+    },
+    settings: { axis: 'horizontal', direction: 'ltr' },
+    update() {
+      updateCalls += 1;
+    },
+    views: { all: () => views },
+    erase() {},
+    prev() {
+      container.scrollLeft -= PAGE_WIDTH;
+    },
+  };
+  const cleanup = stabilizeContinuousManagerLayout({
+    manager,
+    reportLocation() {
+      reportLocationCalls += 1;
+    },
+  }, {
+    ...frameEnvironment,
+    clearTimeout: timers.clearTimeout,
+    ResizeObserver: resizeObserver.ResizeObserver,
+    setTimeout: timers.setTimeout,
+  });
+
+  manager.prev();
+  precedingIllustrationView.element.offsetWidth = 0;
+  textView.element.offsetLeft = 0;
+  followingIllustrationView.element.offsetLeft = PAGE_WIDTH * 4;
+  resizeObserver.notify(precedingIllustrationView.element);
+  await waitForFrame();
+
+  assert.equal(container.scrollLeft, PAGE_WIDTH * 3);
+  assert.equal(updateCalls, 0);
+  assert.equal(reportLocationCalls, 1);
+  cleanup();
+});
+
+test('keeps a table-of-contents target anchored while prepended views gain width', async () => {
+  const resizeObserver = createResizeObserverHarness();
+  let reportLocationCalls = 0;
+  const container = { scrollLeft: 0, style: {} };
+  const targetView = {
+    displayed: false,
+    element: { offsetLeft: 0, offsetWidth: 0 },
+    section: { index: 39 },
+  };
+  const views = [targetView];
+  const manager = {
+    container,
+    name: 'continuous',
+    scrollTo(left) {
+      container.scrollLeft = left;
+    },
+    settings: { axis: 'horizontal', direction: 'ltr' },
+    update() {
+      targetView.displayed = true;
+    },
+    views: { all: () => views },
+    erase() {},
+    prepend(section) {
+      const view = {
+        element: { offsetLeft: 0, offsetWidth: 0 },
+        section,
+      };
+      views.unshift(view);
+      return view;
+    },
+  };
+  const cleanup = stabilizeContinuousManagerLayout({
+    manager,
+    reportLocation() {
+      reportLocationCalls += 1;
+    },
+  }, {
+    ...frameEnvironment,
+    ResizeObserver: resizeObserver.ResizeObserver,
+  });
+
+  const precedingTextView = manager.prepend({ index: 38 });
+  const precedingIllustrationView = manager.prepend({ index: 37 });
+  precedingIllustrationView.element.offsetWidth = PAGE_WIDTH;
+  precedingTextView.element.offsetLeft += PAGE_WIDTH;
+  targetView.element.offsetLeft += PAGE_WIDTH;
+  precedingTextView.element.offsetWidth = PAGE_WIDTH * 4;
+  targetView.element.offsetLeft += PAGE_WIDTH * 4;
+  resizeObserver.notify(precedingIllustrationView.element);
+  resizeObserver.notify(precedingTextView.element);
+  await waitForFrame();
+
+  assert.equal(container.scrollLeft, targetView.element.offsetLeft);
+  assert.equal(targetView.displayed, true);
+  assert.equal(reportLocationCalls, 1);
+  cleanup();
+});
+
+test('keeps a table-of-contents illustration anchored through a delayed trim', async () => {
+  const resizeObserver = createResizeObserverHarness();
+  const timers = createTimerHarness();
+  const container = { scrollLeft: 0, style: {} };
+  const targetView = {
+    element: { offsetLeft: 0, offsetWidth: 0 },
+    section: { index: 39 },
+  };
+  const followingTextView = {
+    element: { offsetLeft: 0, offsetWidth: 0 },
+    section: { index: 40 },
+  };
+  const views = [targetView, followingTextView];
+  const manager = {
+    container,
+    name: 'continuous',
+    scrollTo(left) {
+      container.scrollLeft = left;
+    },
+    settings: { axis: 'horizontal', direction: 'ltr' },
+    views: { all: () => views },
+    erase(view, above) {
+      const removedLeft = view.element.offsetLeft;
+      const removedWidth = view.element.offsetWidth;
+      views.splice(views.indexOf(view), 1);
+      views.forEach((remainingView) => {
+        if (remainingView.element.offsetLeft > removedLeft) {
+          remainingView.element.offsetLeft -= removedWidth;
+        }
+      });
+      if (above) container.scrollLeft -= removedWidth;
+    },
+    prepend(section) {
+      const view = {
+        element: { offsetLeft: 0, offsetWidth: 0 },
+        section,
+      };
+      views.unshift(view);
+      return view;
+    },
+  };
+  const cleanup = stabilizeContinuousManagerLayout({ manager }, {
+    ...frameEnvironment,
+    clearTimeout: timers.clearTimeout,
+    ResizeObserver: resizeObserver.ResizeObserver,
+    setTimeout: timers.setTimeout,
+  });
+
+  const precedingTextView = manager.prepend({ index: 38 });
+  const precedingIllustrationView = manager.prepend({ index: 37 });
+  precedingIllustrationView.element.offsetWidth = PAGE_WIDTH;
+  precedingTextView.element.offsetLeft = PAGE_WIDTH;
+  precedingTextView.element.offsetWidth = PAGE_WIDTH * 4;
+  targetView.element.offsetLeft = PAGE_WIDTH * 5;
+  targetView.element.offsetWidth = PAGE_WIDTH;
+  followingTextView.element.offsetLeft = PAGE_WIDTH * 6;
+  followingTextView.element.offsetWidth = PAGE_WIDTH * 10;
+  resizeObserver.notify(precedingIllustrationView.element);
+  resizeObserver.notify(precedingTextView.element);
+  await waitForFrame();
+  assert.equal(container.scrollLeft, targetView.element.offsetLeft);
+
+  // The continuous manager can settle one page ahead and trim a preceding
+  // view after the initial resize burst. The directory target must still own
+  // the anchor when that delayed trim is applied.
+  timers.runDelay(500);
+  container.scrollLeft = followingTextView.element.offsetLeft;
+  manager.erase(precedingIllustrationView, [precedingIllustrationView]);
+  await waitForFrame();
+
+  assert.equal(container.scrollLeft, targetView.element.offsetLeft);
+  cleanup();
+});
+
+test('anchors an already-loaded table-of-contents illustration through a delayed trim', async () => {
+  const timers = createTimerHarness();
+  const {
+    container,
+    illustrationView,
+    manager,
+    precedingView,
+    textView,
+  } = createContinuousManager({ compensateAbove: true });
+  const scrollListeners = new Set();
+  container.addEventListener = (type, listener) => {
+    if (type === 'scroll') scrollListeners.add(listener);
+  };
+  container.removeEventListener = (type, listener) => {
+    if (type === 'scroll') scrollListeners.delete(listener);
+  };
+  container.dispatchScroll = () => {
+    scrollListeners.forEach((listener) => listener());
+  };
+  illustrationView.section.href = 'chapter7.xhtml';
+  let resolveDisplay;
+  manager.display = (section, target) => {
+    assert.equal(section, illustrationView.section);
+    assert.equal(target, 'Text/chapter7.xhtml');
+    container.scrollLeft = illustrationView.element.offsetLeft;
+    return new Promise((resolve) => {
+      resolveDisplay = resolve;
+    });
+  };
+  const cleanup = stabilizeContinuousManagerLayout({ manager }, {
+    ...frameEnvironment,
+    clearTimeout: timers.clearTimeout,
+    setTimeout: timers.setTimeout,
+  });
+
+  const display = manager.display(illustrationView.section, 'Text/chapter7.xhtml');
+  assert.equal(container.scrollLeft, illustrationView.element.offsetLeft);
+
+  container.scrollLeft = textView.element.offsetLeft;
+  resolveDisplay();
+  await display;
+  await waitForFrame();
+
+  // The manager can perform one final scroll after the display promise and
+  // the first animation-frame correction have both completed.
+  container.scrollLeft = textView.element.offsetLeft;
+  timers.runDelay(180);
+  await waitForFrame();
+  assert.equal(container.scrollLeft, illustrationView.element.offsetLeft);
+
+  container.scrollLeft = textView.element.offsetLeft;
+  container.dispatchScroll();
+  await waitForFrame();
+  assert.equal(container.scrollLeft, illustrationView.element.offsetLeft);
+
+  // A stale manager settlement can land on the following text view before a
+  // queued trim removes the preceding view. The explicit display destination
+  // must win even though no prepend occurred during this navigation.
+  timers.runDelay(3000);
+  manager.erase(precedingView, [precedingView]);
+  await waitForFrame();
+
+  assert.equal(container.scrollLeft, illustrationView.element.offsetLeft);
   cleanup();
 });
 

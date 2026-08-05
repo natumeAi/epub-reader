@@ -186,6 +186,7 @@ function compareCfis(book, first, second) {
 
 export function findCurrentTocItem(items, { book, cfi, href } = {}) {
   const flatItems = flattenTocItems(items);
+  const currentDocument = hrefDocument(href);
   let bestMatch = null;
 
   if (cfi) {
@@ -206,9 +207,18 @@ export function findCurrentTocItem(items, { book, cfi, href } = {}) {
     });
   }
 
-  if (bestMatch) return bestMatch;
+  if (bestMatch) {
+    if (!currentDocument || hrefDocument(bestMatch.href) === currentDocument) {
+      return bestMatch;
+    }
 
-  const currentDocument = hrefDocument(href);
+    const exactDocumentMatches = flatItems.filter((item) => (
+      hrefDocument(item.href) === currentDocument
+    ));
+    if (exactDocumentMatches.length === 1) return exactDocumentMatches[0];
+    return bestMatch;
+  }
+
   if (!currentDocument) return null;
 
   return flatItems.find((item) => hrefDocument(item.href) === currentDocument) || null;

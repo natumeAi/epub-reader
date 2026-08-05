@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getPageProgressFromLocation } from '../src/hooks/usePageProgress.js';
 import { measureReadingSectionPages } from '../src/utils/epubPageMap.js';
-import { createReadingSections } from '../src/utils/epubToc.js';
+import { createReadingSections, findCurrentTocItem } from '../src/utils/epubToc.js';
 
 function locationAt(index, page, total) {
   return {
@@ -52,6 +52,39 @@ function createBook(sectionHrefs) {
     },
   };
 }
+
+test('uses the exact table-of-contents document on an illustration omitted from locations', () => {
+  const book = createBook(['Text/chapter6.xhtml', 'Text/chapter7.xhtml']);
+  book.locations = {
+    epubcfi: {
+      compare: (first, second) => Number(first) - Number(second),
+    },
+  };
+  const items = [
+    {
+      chapterId: '0',
+      href: 'Text/chapter6.xhtml',
+      label: '24',
+      startCfi: '36',
+      subitems: [],
+    },
+    {
+      chapterId: '1',
+      href: 'Text/chapter7.xhtml',
+      label: '25',
+      // Generated locations skipped the image-only section and put this
+      // boundary at the following text document.
+      startCfi: '40',
+      subitems: [],
+    },
+  ];
+
+  assert.equal(findCurrentTocItem(items, {
+    book,
+    cfi: '39',
+    href: 'Text/chapter7.xhtml',
+  })?.label, '25');
+});
 
 test('groups complete publication documents between table-of-contents entries', () => {
   const book = createBook([

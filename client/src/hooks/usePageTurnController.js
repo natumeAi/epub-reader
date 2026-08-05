@@ -11,6 +11,7 @@ import {
   displayRenditionTarget,
   navigateBasicRenditionPage,
   readRenditionLocation,
+  releaseContinuousManagerLayoutAnchor,
   stabilizeContinuousManagerLayout,
   waitForContinuousManagerQueue,
 } from '../utils/epubNavigation.js';
@@ -59,8 +60,19 @@ function createRelocationWait(rendition, predicate, timeoutMs) {
   });
   return {
     cancel: () => finish(null),
+    isSettled: () => settled,
     promise,
   };
+}
+
+function requestCommittedLocation(rendition, waiter) {
+  if (waiter?.isSettled?.() || typeof rendition?.reportLocation !== 'function') return;
+
+  try {
+    void Promise.resolve(rendition.reportLocation()).catch(() => {});
+  } catch {
+    // The existing relocation timeout remains the recovery path.
+  }
 }
 
 export function usePageTurnController({
@@ -102,9 +114,10 @@ export function usePageTurnController({
   ), []);
 
   const beginOperation = useCallback(() => {
+    releaseContinuousManagerLayoutAnchor(renditionRef.current);
     cancellationVersionRef.current += 1;
     return cancellationVersionRef.current;
-  }, []);
+  }, [renditionRef]);
 
   const setEdgeOpacity = useCallback((opacity) => {
     const edge = edgeRef.current;
@@ -175,6 +188,7 @@ export function usePageTurnController({
   }, [clearDragFrame, releasePointer]);
 
   const cancelPageTurn = useCallback((reason = 'cancelled') => {
+    releaseContinuousManagerLayoutAnchor(renditionRef.current);
     cancellationVersionRef.current += 1;
     relocationWaitRef.current?.cancel();
     relocationWaitRef.current = null;
@@ -182,7 +196,7 @@ export function usePageTurnController({
     adapter?.cancel({ reason, restoreOrigin: true });
     void syncCommittedPage();
     restoreReadyPhase();
-  }, [adapter, finishPointer, restoreReadyPhase, syncCommittedPage]);
+  }, [adapter, finishPointer, renditionRef, restoreReadyPhase, syncCommittedPage]);
 
   const navigateTo = useCallback(async (target) => {
     if (!target || !renditionRef.current) return 'failed';
@@ -259,9 +273,14 @@ export function usePageTurnController({
     );
     relocationWaitRef.current = waiter;
     try {
-      await navigateBasicRenditionPage(rendition, nextDirection, {
+      const navigation = navigateBasicRenditionPage(rendition, nextDirection, {
         shouldContinue: () => isCurrentOperation(operationVersion),
       });
+      // Continuous navigation moves the viewport synchronously, while its
+      // preload/check queue can take much longer. Publish the visual page now
+      // so the label cannot lag one turn behind the content.
+      void syncCommittedPage();
+      await navigation;
       void syncCommittedPage();
       const location = await waiter.promise;
       if (!location) {
@@ -333,6 +352,7 @@ export function usePageTurnController({
     // publish its relocated event until a later frame. Refresh the page label
     // directly from the manager geometry so it changes with the visual page.
     void syncCommittedPage();
+    requestCommittedLocation(rendition, waiter);
     const location = await waiter.promise;
     if (!isCurrentOperation(operationVersion)) return 'ignored';
     if (!location || !adapter.isStableAt(delta)) {
@@ -633,6 +653,7 @@ export function usePageTurnController({
           return;
         }
         void syncCommittedPage();
+        requestCommittedLocation(renditionRef.current, waiter);
         const location = await waiter.promise;
         if (!isCurrentOperation(operationVersion)) return;
         if (!location || !adapter.isStableAt(delta)) {

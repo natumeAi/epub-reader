@@ -219,6 +219,53 @@ export function createEpubPageTurnAdapter(rendition, environment = {}) {
     }
   }
 
+  function captureLayoutAnchors(manager) {
+    let displayedViews;
+    try {
+      displayedViews = manager?.views?.displayed?.call(manager.views);
+    } catch {
+      return [];
+    }
+    if (!Array.isArray(displayedViews)) return [];
+
+    return displayedViews.flatMap((view) => {
+      const element = view?.element;
+      const geometry = readViewGeometry(element);
+      return geometry ? [{ element, left: geometry.left }] : [];
+    });
+  }
+
+  function isStableAtVisualPage(activeSession, pageDelta) {
+    if (!activeSession?.layoutAnchors?.length) return false;
+
+    // At the left preload edge epub.js can prepend a view and counter-scroll
+    // by the same width. The destination stays visible even though its new
+    // absolute scroll coordinate no longer matches the session's old target.
+    const targetLogical = activeSession.origin + pageDelta * activeSession.pageWidth;
+    const originPhysical = toPhysicalScroll({
+      logicalScroll: activeSession.origin,
+      maxScroll: activeSession.maxScroll,
+      direction: activeSession.direction,
+      rtlScrollType: activeSession.rtlScrollType,
+    });
+    const targetPhysical = toPhysicalScroll({
+      logicalScroll: targetLogical,
+      maxScroll: activeSession.maxScroll,
+      direction: activeSession.direction,
+      rtlScrollType: activeSession.rtlScrollType,
+    });
+    const expectedLeftDelta = originPhysical - targetPhysical;
+    if (!Number.isFinite(expectedLeftDelta)) return false;
+
+    return activeSession.layoutAnchors.some((anchor) => {
+      if (anchor.element?.isConnected === false) return false;
+      const geometry = readViewGeometry(anchor.element);
+      return geometry &&
+        Math.abs((geometry.left - anchor.left) - expectedLeftDelta) <=
+          ALIGNMENT_EPSILON_PX;
+    });
+  }
+
   function inspectCompositor(capability, edgeElement = null, options = {}) {
     const views = capability.manager?.views;
     let displayedViews;
@@ -539,6 +586,7 @@ export function createEpubPageTurnAdapter(rendition, environment = {}) {
     disconnectSessionWatchers(activeSession);
     restoreSessionStyles(activeSession);
     activeSession.views?.splice(0);
+    activeSession.layoutAnchors?.splice(0);
     activeSession.edgeSnapshot = null;
   }
 
@@ -752,6 +800,7 @@ export function createEpubPageTurnAdapter(rendition, environment = {}) {
       diagnosticAction: action,
       diagnosticRecordId: null,
       generation: ++sessionGeneration,
+      layoutAnchors: captureLayoutAnchors(capability.manager),
       physicalScroll: Number(capability.scroller.scrollLeft),
       previousEdgeTransform: edgeElement?.style.transform || '',
       previousEdgeWillChange: edgeElement?.style.willChange || '',
@@ -826,9 +875,13 @@ export function createEpubPageTurnAdapter(rendition, environment = {}) {
   function isStableAt(pageDelta) {
     if (!session || ![-1, 0, 1].includes(pageDelta)) return false;
     const target = session.origin + pageDelta * session.pageWidth;
-    return Math.abs(readLogical() - target) <= ALIGNMENT_EPSILON_PX &&
+    const visualsSettled =
       Math.abs(session.boundaryOffset) <= ALIGNMENT_EPSILON_PX &&
       Math.abs(session.visualOffset) <= ALIGNMENT_EPSILON_PX;
+    return visualsSettled && (
+      Math.abs(readLogical() - target) <= ALIGNMENT_EPSILON_PX ||
+      isStableAtVisualPage(session, pageDelta)
+    );
   }
 
   function isStableAligned() {

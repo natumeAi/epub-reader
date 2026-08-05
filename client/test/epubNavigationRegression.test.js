@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { act, createElement } from 'react';
 import { JSDOM } from 'jsdom';
 import { usePageTurnController } from '../src/hooks/usePageTurnController.js';
+import { createEpubPageTurnAdapter } from '../src/utils/epubPageTurnAdapter.js';
 
 const PAGE_WIDTH = 564;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -195,6 +196,409 @@ test('moves backward across a publication document boundary through the public c
     assert.equal(result, 'completed');
     assert.equal(currentLocation.start.index, illustrationSection.index);
   } finally {
+    await harness?.cleanup();
+    dom.cleanup();
+  }
+});
+
+test('keeps a touch backward turn on page 1 when a preceding publication document is prepended', async () => {
+  const dom = installDom();
+  const touchPageWidth = 430;
+  let harness;
+  let adapter;
+  try {
+    const relocatedListeners = new Set();
+    const illustrationView = {
+      documentLeft: 0,
+      element: null,
+    };
+    let scrollPosition = touchPageWidth;
+    let contentWidth = touchPageWidth * 3;
+    let prepended = false;
+    let displayCalls = 0;
+    let currentLocation = {
+      atEnd: false,
+      atStart: false,
+      start: {
+        cfi: 'epubcfi(/6/4!/4/2)',
+        displayed: { page: 2, total: 58 },
+        index: 2,
+      },
+    };
+    let resolveFinished;
+    const finished = new Promise((resolve) => {
+      resolveFinished = resolve;
+    });
+
+    illustrationView.element = {
+      classList: { contains: (name) => name === 'epub-view' },
+      getBoundingClientRect: () => ({
+        bottom: 600,
+        height: 600,
+        left: illustrationView.documentLeft - scrollPosition,
+        right: illustrationView.documentLeft - scrollPosition + touchPageWidth,
+        top: 0,
+        width: touchPageWidth,
+      }),
+      isConnected: true,
+      style: { transform: '', willChange: '' },
+    };
+
+    const scroller = {
+      clientHeight: 600,
+      clientWidth: touchPageWidth,
+      offsetHeight: 600,
+      offsetWidth: touchPageWidth,
+      style: {},
+      get scrollLeft() {
+        return scrollPosition;
+      },
+      set scrollLeft(value) {
+        scrollPosition = Number(value);
+        if (prepended || scrollPosition > 1) return;
+
+        // ContinuousViewManager fills the preload window at the left edge and
+        // counter-scrolls by the inserted view width. The illustration remains
+        // visible, but its absolute scroll coordinate is no longer zero.
+        prepended = true;
+        contentWidth += touchPageWidth;
+        illustrationView.documentLeft += touchPageWidth;
+        scrollPosition += touchPageWidth;
+        currentLocation = {
+          atEnd: false,
+          atStart: false,
+          start: {
+            cfi: 'epubcfi(/6/2!/4/2)',
+            displayed: { page: 1, total: 1 },
+            index: 1,
+          },
+        };
+      },
+      get scrollWidth() {
+        return contentWidth;
+      },
+    };
+    const manager = {
+      container: scroller,
+      isPaginated: true,
+      layout: { divisor: 1, pageWidth: touchPageWidth },
+      name: 'continuous',
+      settings: { axis: 'horizontal', direction: 'ltr', snap: true },
+      snapper: {},
+      views: {
+        container: {},
+        displayed: () => [illustrationView],
+      },
+    };
+    const rendition = {
+      currentLocation: () => currentLocation,
+      display() {
+        displayCalls += 1;
+        currentLocation = {
+          atEnd: false,
+          atStart: false,
+          start: {
+            cfi: 'epubcfi(/6/4!/4/2)',
+            displayed: { page: 2, total: 58 },
+            index: 2,
+          },
+        };
+        resolveFinished('recovered');
+      },
+      manager,
+      off(eventName, listener) {
+        if (eventName === 'relocated') relocatedListeners.delete(listener);
+      },
+      on(eventName, listener) {
+        if (eventName === 'relocated') relocatedListeners.add(listener);
+      },
+      reportLocation() {
+        relocatedListeners.forEach((listener) => listener(currentLocation));
+        return Promise.resolve(currentLocation);
+      },
+    };
+    const diagnostics = {
+      begin: () => null,
+      cancel() {},
+      destroy() {},
+      finish() {},
+      frame() {},
+      markAnimationStart() {},
+      markVisualUpdate() {},
+    };
+    adapter = createEpubPageTurnAdapter(rendition, {
+      debugConfig: { enabled: false, forceBackend: null },
+      diagnostics,
+    });
+    harness = await mountPageTurnController({
+      adapter,
+      currentCfiRef: { current: currentLocation.start.cfi },
+      edgeRef: { current: null },
+      onNavigationSettled: () => {
+        resolveFinished('settled');
+        return true;
+      },
+      onPageTurnCommitted: () => true,
+      renditionRef: { current: rendition },
+    });
+
+    const pointerTarget = document.createElement('div');
+    pointerTarget.getBoundingClientRect = () => ({ left: 0, width: touchPageWidth });
+    pointerTarget.hasPointerCapture = () => false;
+    pointerTarget.releasePointerCapture = () => {};
+    pointerTarget.setPointerCapture = () => {};
+    await act(async () => {
+      harness.controller().handlePointerDown({
+        clientX: 150,
+        clientY: 300,
+        currentTarget: pointerTarget,
+        isPrimary: true,
+        pointerId: 1,
+        pointerType: 'touch',
+        timeStamp: 0,
+      });
+      harness.controller().handlePointerMove({
+        cancelable: true,
+        clientX: 270,
+        clientY: 300,
+        currentTarget: pointerTarget,
+        pointerId: 1,
+        preventDefault() {},
+        timeStamp: 100,
+      });
+      harness.controller().handlePointerUp({
+        clientX: 330,
+        clientY: 300,
+        currentTarget: pointerTarget,
+        pointerId: 1,
+        timeStamp: 200,
+      });
+    });
+
+    let timeoutId;
+    const timeout = new Promise((resolve) => {
+      timeoutId = setTimeout(() => resolve('timeout'), 2000);
+    });
+    let outcome;
+    await act(async () => {
+      outcome = await Promise.race([finished, timeout]);
+    });
+    clearTimeout(timeoutId);
+
+    assert.equal(outcome, 'settled');
+    assert.equal(currentLocation.start.displayed.page, 1);
+    assert.equal(displayCalls, 0);
+  } finally {
+    await harness?.cleanup();
+    adapter?.destroy();
+    dom.cleanup();
+  }
+});
+
+test('keeps page 1 after a committed touch turn when WebKit delays relocated', async () => {
+  const dom = installDom();
+  const touchPageWidth = 430;
+  const relocatedListeners = new Set();
+  let currentPage = 2;
+  let recoverCalls = 0;
+  let harness;
+  let resolveFinished;
+  const finished = new Promise((resolve) => {
+    resolveFinished = resolve;
+  });
+  const currentLocation = () => ({
+    atEnd: false,
+    atStart: false,
+    start: {
+      cfi: `epubcfi(/6/4!/4/${currentPage * 2})`,
+      displayed: { page: currentPage, total: 58 },
+      index: 2,
+    },
+  });
+  const adapter = {
+    animateTo(pageDelta) {
+      currentPage += pageDelta;
+      return Promise.resolve({ status: 'completed' });
+    },
+    begin() {
+      return {
+        canNext: true,
+        canPrevious: true,
+        pageWidth: touchPageWidth,
+      };
+    },
+    cancel() {},
+    dragBy(distanceX) {
+      return {
+        effectiveDistanceX: distanceX,
+        progress: Math.abs(distanceX) / touchPageWidth,
+      };
+    },
+    end() {},
+    inspect: () => ({ available: true, pageWidth: touchPageWidth }),
+    isStableAt: () => currentPage === 1,
+    recover() {
+      recoverCalls += 1;
+      currentPage = 2;
+      resolveFinished('recovered');
+      return true;
+    },
+  };
+  const rendition = {
+    currentLocation,
+    manager: {
+      container: { style: {} },
+      name: 'continuous',
+      settings: { axis: 'horizontal', direction: 'ltr' },
+    },
+    off(eventName, listener) {
+      if (eventName === 'relocated') relocatedListeners.delete(listener);
+    },
+    on(eventName, listener) {
+      if (eventName === 'relocated') relocatedListeners.add(listener);
+    },
+    reportLocation() {
+      const location = currentLocation();
+      relocatedListeners.forEach((listener) => listener(location));
+      return Promise.resolve(location);
+    },
+  };
+
+  try {
+    harness = await mountPageTurnController({
+      adapter,
+      currentCfiRef: { current: currentLocation().start.cfi },
+      edgeRef: { current: null },
+      onNavigationSettled: () => {
+        resolveFinished('settled');
+        return true;
+      },
+      onPageTurnCommitted: () => true,
+      renditionRef: { current: rendition },
+    });
+    const pointerTarget = document.createElement('div');
+    pointerTarget.getBoundingClientRect = () => ({ left: 0, width: touchPageWidth });
+    pointerTarget.hasPointerCapture = () => false;
+    pointerTarget.releasePointerCapture = () => {};
+    pointerTarget.setPointerCapture = () => {};
+
+    await act(async () => {
+      harness.controller().handlePointerDown({
+        clientX: 150,
+        clientY: 300,
+        currentTarget: pointerTarget,
+        isPrimary: true,
+        pointerId: 1,
+        pointerType: 'touch',
+        timeStamp: 0,
+      });
+      harness.controller().handlePointerMove({
+        cancelable: true,
+        clientX: 270,
+        clientY: 300,
+        currentTarget: pointerTarget,
+        pointerId: 1,
+        preventDefault() {},
+        timeStamp: 100,
+      });
+      harness.controller().handlePointerUp({
+        clientX: 330,
+        clientY: 300,
+        currentTarget: pointerTarget,
+        pointerId: 1,
+        timeStamp: 200,
+      });
+    });
+
+    let timeoutId;
+    const timeout = new Promise((resolve) => {
+      timeoutId = setTimeout(() => resolve('timeout'), 2000);
+    });
+    let outcome;
+    await act(async () => {
+      outcome = await Promise.race([finished, timeout]);
+    });
+    clearTimeout(timeoutId);
+
+    assert.equal(outcome, 'settled');
+    assert.equal(currentPage, 1);
+    assert.equal(recoverCalls, 0);
+  } finally {
+    await harness?.cleanup();
+    dom.cleanup();
+  }
+});
+
+test('publishes an ordinary basic turn before continuous manager work settles', async () => {
+  const dom = installDom();
+  let harness;
+  let releaseQueue;
+  try {
+    const pendingQueue = new Promise((resolve) => {
+      releaseQueue = resolve;
+    });
+    const relocatedListeners = new Set();
+    const container = { scrollLeft: PAGE_WIDTH * 2, style: {} };
+    const location = {
+      atEnd: false,
+      atStart: false,
+      start: { cfi: 'epubcfi(/6/4)', displayed: { page: 3, total: 4 }, index: 38 },
+    };
+    const manager = {
+      container,
+      name: 'continuous',
+      q: {
+        enqueue(task) {
+          return pendingQueue.then(() => task.call(manager));
+        },
+      },
+      settings: { axis: 'horizontal', direction: 'ltr' },
+      views: { first: () => ({ section: { index: 38 } }) },
+    };
+    const rendition = {
+      currentLocation: () => location,
+      manager,
+      off(eventName, listener) {
+        if (eventName === 'relocated') relocatedListeners.delete(listener);
+      },
+      on(eventName, listener) {
+        if (eventName === 'relocated') relocatedListeners.add(listener);
+      },
+      prev() {
+        container.scrollLeft -= PAGE_WIDTH;
+        location.start.displayed.page -= 1;
+        relocatedListeners.forEach((listener) => listener(location));
+      },
+    };
+    const committedScrollPositions = [];
+    harness = await mountPageTurnController({
+      currentCfiRef: { current: location.start.cfi },
+      edgeRef: { current: null },
+      onNavigationSettled: () => true,
+      onPageTurnCommitted: () => {
+        committedScrollPositions.push(container.scrollLeft);
+        return true;
+      },
+      reducedMotion: true,
+      renditionRef: { current: rendition },
+    });
+
+    let turn;
+    await act(async () => {
+      turn = harness.controller().turnPage('prev');
+      await Promise.resolve();
+    });
+
+    assert.deepEqual(committedScrollPositions, [PAGE_WIDTH]);
+
+    let result;
+    await act(async () => {
+      releaseQueue();
+      result = await turn;
+    });
+    assert.equal(result, 'completed');
+  } finally {
+    releaseQueue?.();
     await harness?.cleanup();
     dom.cleanup();
   }
