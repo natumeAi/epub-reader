@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Epub from 'epubjs';
 import { getReadingProgress } from '../api/readingApi.js';
+import { createEpubPagination } from '../utils/epubPagination.js';
 import { createEpubPageTurnAdapter } from '../utils/epubPageTurnAdapter.js';
-import { addTocProgress, findCurrentTocItem, prepareTocItems } from '../utils/epubToc.js';
+import {
+  addTocProgress,
+  createReadingSections,
+  findCurrentTocItem,
+  prepareTocItems,
+} from '../utils/epubToc.js';
 import { readProgressOutbox, selectProgressForRelocation } from '../utils/readingProgress.js';
 import { getReaderPageGap } from './useReaderSettings.js';
 
@@ -219,14 +225,21 @@ export function useEpubRendition({
   loadReaderSettings,
   markReaderSettingsLoaded,
   onBookUnavailable,
+  pageProgressController,
   readerSettingsRef,
   renditionRef,
-  resetPageProgress,
   resetReaderSettingsLoad,
   setError,
   setIsLoading,
-  updatePageProgressFromLocation,
 }) {
+  const {
+    beginBookPageProgress,
+    failReadingSectionPageRanges,
+    invalidateReadingSectionPages,
+    setReadingSectionPageRanges,
+    setReadingSections,
+    updatePageProgressFromLocation,
+  } = pageProgressController;
   const [progress, setProgress] = useState(0);
   const [toc, setToc] = useState([]);
   const [currentHref, setCurrentHref] = useState(null);
@@ -247,6 +260,7 @@ export function useEpubRendition({
   const recoverVisibleReaderRef = useRef(null);
   const resumeLifecycleActiveRef = useRef(true);
   const locationCaptureRef = useRef(null);
+  const bookPaginationRequestRef = useRef(null);
 
   useEffect(() => {
     if (!isLayoutReady || !containerRef.current || !book?.id) return undefined;
@@ -260,18 +274,32 @@ export function useEpubRendition({
     let reapplyReaderSettingsToView;
     let adapter = null;
     let activeToc = [];
+    let bookArrayBuffer = null;
+    let epubPagination = null;
+    let handleRenditionResized;
     let latestHref = null;
+    let latestSectionIndex = null;
     let isInitializing = true;
     loadStartedAtRef.current = Date.now();
     loadingStateRef.current = true;
     errorStateRef.current = '';
     setIsLoading(true);
     setError('');
-    resetPageProgress();
+    beginBookPageProgress();
     setToc([]);
     setCurrentHref(null);
     setCurrentChapter(null);
     resetReaderSettingsLoad();
+
+    const requestBookPagination = (sectionIndex = latestSectionIndex) => {
+      if (destroyed) return;
+      void epubPagination?.request({
+        container: containerRef.current,
+        currentSectionIndex: sectionIndex,
+        settings: { ...readerSettingsRef.current },
+      });
+    };
+    bookPaginationRequestRef.current = requestBookPagination;
 
     (async () => {
       let epubBook;
@@ -288,6 +316,7 @@ export function useEpubRendition({
 
         const arrayBuffer = await fileResponse.arrayBuffer();
         if (destroyed) return;
+        bookArrayBuffer = arrayBuffer;
 
         epubBook = Epub(arrayBuffer);
         bookRef.current = epubBook;
@@ -323,6 +352,8 @@ export function useEpubRendition({
           });
         };
         rendition.on('rendered', reapplyReaderSettingsToView);
+        handleRenditionResized = () => requestBookPagination();
+        rendition.on('resized', handleRenditionResized);
 
         let startCfi = reloadCfiRef.current || undefined;
         let loadedReaderSettings = readerSettingsRef.current;
@@ -388,9 +419,14 @@ export function useEpubRendition({
           progressRef.current = progressValue;
           currentCfiRef.current = cfi;
           latestHref = location.start.href || null;
+          const relocatedSectionIndex = Number(location.start.index);
+          if (Number.isInteger(relocatedSectionIndex)) latestSectionIndex = relocatedSectionIndex;
           const chapter = syncCurrentChapter(cfi, latestHref);
           setProgress(progressValue);
-          updatePageProgressFromLocation(location);
+          updatePageProgressFromLocation(location, {
+            readingSectionId: chapter?.href || null,
+          });
+          requestBookPagination(latestSectionIndex);
           setCurrentHref(latestHref);
           if (persist) {
             enqueueProgress({
@@ -483,35 +519,56 @@ export function useEpubRendition({
         loadingStateRef.current = false;
         setIsLoading(false);
 
-        const navigationPromise = epubBook.loaded.navigation.then((nav) => {
-          const nextToc = prepareTocItems(nav?.toc, '', {
+        const navigationPromise = epubBook.loaded.navigation
+          .then((nav) => prepareTocItems(nav?.toc, '', {
             book: epubBook,
             navigationPath: epubBook.packaging?.navPath || epubBook.packaging?.ncxPath || '',
+          }))
+          .catch(() => [])
+          .then((nextToc) => {
+            if (destroyed) return nextToc;
+            activeToc = nextToc;
+            const readingSections = createReadingSections(nextToc, epubBook);
+            setToc(nextToc);
+            const chapter = syncCurrentChapter();
+            setReadingSections(readingSections, chapter?.href || null);
+            epubPagination?.destroy();
+            epubPagination = createEpubPagination({
+              applyReaderSettingsToContents,
+              arrayBuffer: bookArrayBuffer,
+              onLayoutInvalidated: invalidateReadingSectionPages,
+              onReadingSectionComplete: setReadingSectionPageRanges,
+              onReadingSectionFailed: failReadingSectionPageRanges,
+              readingSections,
+            });
+            requestBookPagination();
+            return nextToc;
           });
-          if (!destroyed) {
+
+        epubBook.locations.generate(1024)
+          .then(
+            () => {
+              locationsReady = true;
+            },
+            () => {
+              locationsReady = false;
+            },
+          )
+          .then(async () => {
+            if (destroyed) return;
+            const currentLocation = await Promise.resolve(rendition.currentLocation?.());
+            updateFromLocation(currentLocation, { persist: false });
+            const preparedToc = await navigationPromise;
+            const nextToc = await addTocProgress(preparedToc, epubBook, {
+              shouldStop: () => destroyed,
+            });
+            if (destroyed) return;
             activeToc = nextToc;
             setToc(nextToc);
-            syncCurrentChapter();
-          }
-          return nextToc;
-        }).catch(() => []);
-
-        epubBook.locations.generate(1024).then(async () => {
-          if (destroyed) return;
-          locationsReady = true;
-          const currentLocation = await Promise.resolve(rendition.currentLocation?.());
-          updateFromLocation(currentLocation, { persist: false });
-          const preparedToc = await navigationPromise;
-          const nextToc = await addTocProgress(preparedToc, epubBook, {
-            shouldStop: () => destroyed,
-          });
-          if (destroyed) return;
-          activeToc = nextToc;
-          setToc(nextToc);
-          syncCurrentChapter();
-        }).catch(() => {
-          locationsReady = false;
-        });
+            const enrichedLocation = await Promise.resolve(rendition.currentLocation?.());
+            updateFromLocation(enrichedLocation, { persist: false });
+          })
+          .catch(() => {});
       } catch (openError) {
         if (!destroyed) {
           if (openError.code === 'BOOK_NOT_FOUND') {
@@ -535,9 +592,14 @@ export function useEpubRendition({
 
     return () => {
       destroyed = true;
+      epubPagination?.destroy();
+      if (bookPaginationRequestRef.current === requestBookPagination) {
+        bookPaginationRequestRef.current = null;
+      }
       flushPendingReaderSettings();
       renditionRef.current?.off?.('relocated', handleRelocated);
       renditionRef.current?.off?.('rendered', reapplyReaderSettingsToView);
+      renditionRef.current?.off?.('resized', handleRenditionResized);
       adapter?.destroy();
       if (pageTurnAdapterRef.current === adapter) {
         pageTurnAdapterRef.current = null;
@@ -553,12 +615,15 @@ export function useEpubRendition({
     applyReaderHorizontalMargin,
     applyReaderSettings,
     applyReaderSettingsToContents,
+    beginBookPageProgress,
     book?.id,
     bookRef,
     containerRef,
     currentCfiRef,
     enqueueProgress,
+    failReadingSectionPageRanges,
     flushPendingReaderSettings,
+    invalidateReadingSectionPages,
     isLayoutReady,
     loadReaderSettings,
     markReaderSettingsLoaded,
@@ -566,12 +631,17 @@ export function useEpubRendition({
     readerReloadKey,
     readerSettingsRef,
     renditionRef,
-    resetPageProgress,
     resetReaderSettingsLoad,
+    setReadingSectionPageRanges,
+    setReadingSections,
     setError,
     setIsLoading,
     updatePageProgressFromLocation,
   ]);
+
+  const requestBookPagination = useCallback(() => {
+    bookPaginationRequestRef.current?.();
+  }, []);
 
   const captureCurrentProgress = useCallback(() => {
     const captureLocation = locationCaptureRef.current;
@@ -821,6 +891,7 @@ export function useEpubRendition({
     currentHref,
     pageTurnAdapter,
     progress,
+    requestBookPagination,
     toc,
   };
 }

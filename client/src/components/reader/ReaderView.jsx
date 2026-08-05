@@ -56,6 +56,7 @@ export function ReaderView({
   const originRectRef = useRef(originRect);
   const isClosingRef = useRef(false);
   const pageEdgeRef = useRef(null);
+  const bookPaginationRequestRef = useRef(null);
   const cancelPageTurnRef = useRef(null);
   const captureCurrentProgressRef = useRef(null);
   const panelCloseTimerRef = useRef(null);
@@ -125,11 +126,14 @@ export function ReaderView({
   }, [onOriginConsumed]);
 
   const {
+    pageProgressController,
     pageProgressLabel,
     refreshCurrentPageProgress,
-    resetPageProgress,
-    updatePageProgressFromLocation,
   } = usePageProgress({ renditionRef });
+  const handleReaderSettingsReflow = useCallback((rendition) => {
+    void refreshCurrentPageProgress(rendition);
+    bookPaginationRequestRef.current?.();
+  }, [refreshCurrentPageProgress]);
 
   const {
     applyReaderHorizontalMargin,
@@ -161,7 +165,7 @@ export function ReaderView({
     containerRef,
     currentCfiRef,
     isReaderReady: !isLoading && !error,
-    onSettingsReflow: refreshCurrentPageProgress,
+    onSettingsReflow: handleReaderSettingsReflow,
     renditionRef,
   });
 
@@ -204,6 +208,7 @@ export function ReaderView({
     currentHref,
     pageTurnAdapter,
     progress,
+    requestBookPagination,
     toc,
   } = useEpubRendition({
     applyReaderHorizontalMargin,
@@ -222,14 +227,14 @@ export function ReaderView({
     loadReaderSettings,
     markReaderSettingsLoaded,
     onBookUnavailable,
+    pageProgressController,
     readerSettingsRef,
     renditionRef,
-    resetPageProgress,
     resetReaderSettingsLoad,
     setError,
     setIsLoading,
-    updatePageProgressFromLocation,
   });
+  bookPaginationRequestRef.current = requestBookPagination;
   captureCurrentProgressRef.current = captureCurrentProgress;
 
   useEffect(() => {
@@ -258,6 +263,7 @@ export function ReaderView({
     handlePointerDown,
     handlePointerMove,
     handlePointerUp,
+    navigateTo,
     phase: pageTurnPhase,
     turnPage,
   } = usePageTurnController({
@@ -389,11 +395,10 @@ export function ReaderView({
   }, [activePanel, error, isLoading, turnPage]);
 
   const goToHref = useCallback((href) => {
-    cancelPageTurnRef.current?.('toc');
     if (!href) return;
-    renditionRef.current?.display(href);
+    void navigateTo(href);
     closePanel();
-  }, [closePanel]);
+  }, [closePanel, navigateTo]);
 
   const overlayStyle = {
     '--reader-bg': readerTheme.background,

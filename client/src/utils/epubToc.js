@@ -126,6 +126,55 @@ export function flattenTocItems(items) {
   ]);
 }
 
+export function createReadingSections(items, book) {
+  const spineItems = book?.spine?.spineItems;
+  if (!Array.isArray(spineItems) || spineItems.length === 0) return [];
+
+  const seenTargets = new Set();
+  const boundaries = flattenTocItems(items).flatMap((item, order) => {
+    const href = item?.href || '';
+    const section = book?.spine?.get?.(item?.href || '');
+    if (!section || !Number.isInteger(section.index) || seenTargets.has(href)) {
+      return [];
+    }
+
+    seenTargets.add(href);
+    return [{
+      href,
+      index: section.index,
+      order,
+    }];
+  }).sort((first, second) => first.index - second.index || first.order - second.order);
+
+  return boundaries.map((boundary, boundaryIndex) => {
+    const nextBoundary = boundaries[boundaryIndex + 1];
+    const endExclusive = !nextBoundary
+      ? spineItems.length
+      : nextBoundary.index > boundary.index
+        ? Math.min(
+          spineItems.length,
+          nextBoundary.index + (nextBoundary.href.includes('#') ? 1 : 0),
+        )
+        : Math.min(spineItems.length, boundary.index + 1);
+    const sectionIndexes = [];
+    for (let sectionIndex = boundary.index; sectionIndex < endExclusive; sectionIndex += 1) {
+      const isBoundaryDocument = sectionIndex === boundary.index || (
+        nextBoundary?.href.includes('#') && sectionIndex === nextBoundary.index
+      );
+      if (isBoundaryDocument || spineItems[sectionIndex]?.linear) {
+        sectionIndexes.push(sectionIndex);
+      }
+    }
+
+    return {
+      endHref: nextBoundary?.href || null,
+      id: boundary.href,
+      sectionIndexes,
+      startHref: boundary.href,
+    };
+  });
+}
+
 function compareCfis(book, first, second) {
   try {
     const result = book?.locations?.epubcfi?.compare(first, second);

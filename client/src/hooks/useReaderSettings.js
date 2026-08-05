@@ -344,7 +344,7 @@ function applyReaderLayoutStylesToFrames(container, settings) {
   });
 }
 
-function applyReaderSettingsToRendition(rendition, settings) {
+export function applyReaderSettingsToRendition(rendition, settings) {
   if (!rendition?.themes) return;
   const theme = getReaderTheme(settings.themeId);
   const horizontalMargin = `${getEffectiveHorizontalMargin(settings.horizontalMargin)}px`;
